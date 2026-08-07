@@ -234,6 +234,18 @@
                         BorderThickness="1"
                         CornerRadius="11">
                     <StackPanel>
+                        <CheckBox Content="{x:Static core:AppText.FolderOnlyMode}"
+                                  IsChecked="{Binding FolderOnlyMode, Mode=TwoWay}"
+                                  IsEnabled="{Binding CanEditFolders}"
+                                  FontSize="11.5" />
+                        <TextBlock Text="{x:Static core:AppText.FolderOnlyModeHint}"
+                                   Margin="22,7,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   FontSize="10"
+                                   TextWrapping="Wrap" />
+                        <Border Height="1"
+                                Margin="0,12"
+                                Background="#202A39" />
                         <CheckBox Content="{x:Static core:AppText.AutoRescan}"
                                   IsChecked="{Binding AutoRefresh, Mode=TwoWay}"
                                   FontSize="11.5" />
@@ -256,6 +268,11 @@
                                            FontSize="10.5" />
                             </StackPanel>
                         </DockPanel>
+                        <TextBlock Text="{x:Static core:AppText.AutoRescanHint}"
+                                   Margin="22,7,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   FontSize="10"
+                                   TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
             </Grid>
@@ -292,7 +309,8 @@
                         <TextBox x:Name="SearchBox"
                                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                  Padding="36,10,12,10"
-                                 ToolTip="{x:Static core:AppText.SearchTooltip}" />
+                                 ToolTip="{Binding SearchTooltip}"
+                                 AutomationProperties.Name="{Binding SearchPrompt}" />
                         <TextBlock Text="⌕"
                                    Margin="13,0,0,1"
                                    HorizontalAlignment="Left"
@@ -300,7 +318,7 @@
                                    Foreground="{StaticResource TextMutedBrush}"
                                    FontSize="20"
                                    IsHitTestVisible="False" />
-                        <TextBlock Text="{x:Static core:AppText.SearchPrompt}"
+                        <TextBlock Text="{Binding SearchPrompt}"
                                    Margin="37,0,0,0"
                                    HorizontalAlignment="Left"
                                    VerticalAlignment="Center"
@@ -330,7 +348,7 @@
                                 Command="{Binding ScanCommand}"
                                 Style="{StaticResource QuietButton}"
                                 Margin="0,0,8,0"
-                                ToolTip="F5" />
+                                ToolTip="{x:Static core:AppText.RescanTooltip}" />
                         <Button Content="{x:Static core:AppText.AddFolder}"
                                 Click="AddFolderButton_Click"
                                 IsEnabled="{Binding CanEditFolders}"
@@ -350,7 +368,8 @@
                               Padding="18,18,12,20"
                               HorizontalScrollBarVisibility="Disabled"
                               VerticalScrollBarVisibility="Auto"
-                              CanContentScroll="False">
+                              CanContentScroll="False"
+                              Visibility="{Binding IsGalleryMode, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <ItemsControl ItemsSource="{Binding VisibleItems}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
@@ -466,6 +485,103 @@
                     </ItemsControl>
                 </ScrollViewer>
 
+                <!-- Lightweight folder-only view: no image files or thumbnails are opened here. -->
+                <ListBox Grid.Row="0"
+                         Padding="12,12,6,14"
+                         ItemsSource="{Binding VisibleFolders}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         HorizontalContentAlignment="Stretch"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.CanContentScroll="True"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         Visibility="{Binding IsFolderOnlyMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                            <Setter Property="Focusable" Value="False" />
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <ContentPresenter />
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border MinHeight="104"
+                                        Margin="6"
+                                        Padding="17"
+                                        Background="{StaticResource SurfaceBrush}"
+                                        BorderBrush="{StaticResource OutlineBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="12">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding DisplayName}"
+                                                   FontSize="15"
+                                                   FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Row="1"
+                                                   Grid.Column="0"
+                                                   Text="{Binding Path}"
+                                                   ToolTip="{Binding Path}"
+                                                   Margin="0,8,0,0"
+                                                   Foreground="{StaticResource TextMutedBrush}"
+                                                   FontSize="10.5"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <Button Grid.Row="0"
+                                                Grid.RowSpan="2"
+                                                Grid.Column="1"
+                                                Content="{x:Static core:AppText.OpenFolder}"
+                                                Margin="18,0,0,0"
+                                                VerticalAlignment="Center"
+                                                Click="OpenFolderButton_Click"
+                                                Style="{StaticResource QuietButton}"
+                                                Padding="12,7"
+                                                AutomationProperties.Name="{Binding OpenAutomationName}" />
+                                        <Grid Grid.Row="2"
+                                              Grid.ColumnSpan="2"
+                                              Margin="0,15,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding CountText}"
+                                                       Foreground="{StaticResource AccentStrongBrush}"
+                                                       FontWeight="SemiBold" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="  ·  "
+                                                       Foreground="{StaticResource TextMutedBrush}" />
+                                            <TextBlock Grid.Column="2"
+                                                       Text="{Binding LatestText}"
+                                                       Foreground="{StaticResource TextMutedBrush}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
                 <!-- Loading state -->
                 <Border Grid.Row="0"
                         Background="{StaticResource WindowBrush}"
@@ -478,12 +594,12 @@
                                        Foreground="{StaticResource AccentStrongBrush}"
                                        FontSize="27" />
                         </Border>
-                        <TextBlock Text="{x:Static core:AppText.SearchingScreenshots}"
+                        <TextBlock Text="{Binding LoadingTitle}"
                                    Margin="0,20,0,0"
                                    HorizontalAlignment="Center"
                                    FontSize="17"
                                    FontWeight="SemiBold" />
-                        <TextBlock Text="{x:Static core:AppText.SearchingDeepLocations}"
+                        <TextBlock Text="{Binding LoadingDetail}"
                                    Margin="0,7,0,16"
                                    Foreground="{StaticResource TextMutedBrush}" />
                         <ProgressBar Width="210"
@@ -512,6 +628,35 @@
                                    FontSize="17"
                                    FontWeight="SemiBold" />
                         <TextBlock Text="{Binding EmptyDetail}"
+                                   Margin="0,7,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   TextAlignment="Center" />
+                        <Button Content="{x:Static core:AppText.AddFolderPlain}"
+                                Margin="0,18,0,0"
+                                Click="AddFolderButton_Click"
+                                IsEnabled="{Binding CanEditFolders}"
+                                Style="{StaticResource QuietButton}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Empty state for the lightweight folder list. -->
+                <Border Grid.Row="0"
+                        Background="{StaticResource WindowBrush}"
+                        Visibility="{Binding IsFolderOnlyEmpty, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Border Width="72" Height="72" CornerRadius="24" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource OutlineBrush}" BorderThickness="1">
+                            <TextBlock Text="□"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextMutedBrush}"
+                                       FontSize="30" />
+                        </Border>
+                        <TextBlock Text="{Binding FolderEmptyTitle}"
+                                   Margin="0,20,0,0"
+                                   HorizontalAlignment="Center"
+                                   FontSize="17"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding FolderEmptyDetail}"
                                    Margin="0,7,0,0"
                                    Foreground="{StaticResource TextMutedBrush}"
                                    TextAlignment="Center" />

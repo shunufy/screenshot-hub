@@ -5,6 +5,7 @@ namespace ScreenshotHub.ViewModels;
 
 internal sealed class FolderViewModel : ObservableObject
 {
+    private string _displayName;
     private int _count;
     private DateTime? _latestUtc;
 
@@ -14,13 +15,23 @@ internal sealed class FolderViewModel : ObservableObject
         bool isAll = false,
         string? customRootPath = null)
     {
-        DisplayName = displayName;
+        _displayName = displayName;
         Path = path;
         IsAll = isAll;
         CustomRootPath = customRootPath;
     }
 
-    public string DisplayName { get; }
+    public string DisplayName
+    {
+        get => _displayName;
+        set
+        {
+            if (SetProperty(ref _displayName, value))
+            {
+                OnPropertyChanged(nameof(OpenAutomationName));
+            }
+        }
+    }
     public string? Path { get; }
     public bool IsAll { get; }
     public string? CustomRootPath { get; }
@@ -53,6 +64,8 @@ internal sealed class FolderViewModel : ObservableObject
     public string CountText => Count.ToString("N0");
 
     public string PathText => IsAll ? AppText.AllDetectedFolders : Path ?? "";
+
+    public string OpenAutomationName => AppText.OpenFolderNamed(DisplayName);
 
     public string LatestText => LatestUtc is { } utc
         ? AppText.Latest(utc.ToLocalTime())

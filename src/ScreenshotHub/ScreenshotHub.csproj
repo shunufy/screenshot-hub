@@ -8,8 +8,8 @@
     <AssemblyName>ScreenshotHub</AssemblyName>
     <RootNamespace>ScreenshotHub</RootNamespace>
     <ScreenshotHubLanguage Condition="'$(ScreenshotHubLanguage)' == ''">ja-JP</ScreenshotHubLanguage>
-    <Version>0.2.0</Version>
-    <FileVersion>0.2.0.0</FileVersion>
+    <Version>0.2.1</Version>
+    <FileVersion>0.2.1.0</FileVersion>
     <AssemblyTitle Condition="'$(ScreenshotHubLanguage)' == 'ja-JP'">スクリーンショット・ハブ</AssemblyTitle>
     <AssemblyTitle Condition="'$(ScreenshotHubLanguage)' == 'en-US'">Screenshot Hub</AssemblyTitle>
     <Product>Screenshot Hub</Product>

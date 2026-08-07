@@ -126,6 +126,26 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OpenFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: FolderViewModel { Path: { Length: > 0 } path } })
+        {
+            return;
+        }
+
+        try
+        {
+            if (!ShellService.OpenFolder(path))
+            {
+                ShowMissingFolderMessage();
+            }
+        }
+        catch (Exception exception)
+        {
+            ShowActionError(exception);
+        }
+    }
+
     private void OpenItem(ScreenshotItemViewModel item)
     {
         try
@@ -165,6 +185,14 @@ public partial class MainWindow : Window
         => MessageBox.Show(
             this,
             AppText.MissingImageMessage,
+            AppText.WindowTitle,
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+
+    private void ShowMissingFolderMessage()
+        => MessageBox.Show(
+            this,
+            AppText.MissingFolderMessage,
             AppText.WindowTitle,
             MessageBoxButton.OK,
             MessageBoxImage.Information);

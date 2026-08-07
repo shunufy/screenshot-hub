@@ -32,7 +32,7 @@ public sealed class SettingsStore
         {
             return await TryLoadAsync(_settingsPath, cancellationToken).ConfigureAwait(false) ??
                    await TryLoadAsync(_backupPath, cancellationToken).ConfigureAwait(false) ??
-                   new HubSettings();
+                   Normalize(new HubSettings());
         }
         finally
         {
@@ -144,6 +144,15 @@ public sealed class SettingsStore
 
     private static HubSettings Normalize(HubSettings settings)
     {
+        if (settings.SchemaVersion < HubSettings.CurrentSchemaVersion)
+        {
+            // v0.2.0 enabled recurring scans by default. Disable that legacy default once
+            // so slower disks do not keep performing full scans in the background.
+            settings.AutoRefresh = false;
+            settings.AutoRefreshMinutes = 30;
+        }
+
+        settings.SchemaVersion = HubSettings.CurrentSchemaVersion;
         settings.AutoRefreshMinutes = Math.Clamp(settings.AutoRefreshMinutes, 1, 120);
         settings.MaxDepth = Math.Clamp(settings.MaxDepth, 1, 64);
         settings.CustomRoots = (settings.CustomRoots ?? [])

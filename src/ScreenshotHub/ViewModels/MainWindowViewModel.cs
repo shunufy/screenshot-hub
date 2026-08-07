@@ -10,11 +10,14 @@ namespace ScreenshotHub.ViewModels;
 
 internal sealed class MainWindowViewModel : ObservableObject, IDisposable
 {
-    public const int PageSize = 240;
+    public const int PageSize = 80;
 
     private readonly SettingsStore _settingsStore;
+    private readonly ScreenshotCatalogStore _catalogStore;
+    private readonly ScreenshotFolderCatalogStore _folderCatalogStore;
     private readonly ThumbnailService _thumbnailService = new();
     private readonly DispatcherTimer _refreshTimer;
+    private readonly DispatcherTimer _searchTimer;
     private readonly List<string> _sessionRoots;
     private readonly bool _restrictToSessionRoots;
     private readonly AsyncRelayCommand _scanCommand;
@@ -25,7 +28,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly List<ScreenshotRecord> _records = new();
     private readonly List<ScreenshotRecord> _filteredRecords = new();
 
-    private HubSettings _settings = new();
+    private HubSettings _settings = HubSettings.CreateDefault();
     private CancellationTokenSource? _scanCancellation;
     private CancellationTokenSource? _thumbnailCancellation;
     private FolderViewModel? _selectedFolder;
@@ -36,8 +39,17 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     private bool _isScanning;
     private bool _isInitialized;
     private bool _isApplyingSettings;
+    private bool _isRebuildingFolders;
+    private bool _isRestoringCatalog;
+    private bool _imageCatalogLoaded;
+    private bool _hasPersistedCatalog;
     private bool _autoRefresh;
-    private int _autoRefreshMinutes = 5;
+    private int _autoRefreshMinutes = 30;
+    private bool _folderOnlyMode;
+    private IReadOnlyList<FolderViewModel> _visibleFolders = [];
+    private int _knownScreenshotCount;
+    private DateTime _catalogScanUtc;
+    private DateTime? _folderCatalogScanUtc;
     private int _pageIndex;
 
     public MainWindowViewModel(
@@ -45,6 +57,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         string? settingsPath = null)
     {
         _settingsStore = new SettingsStore(settingsPath);
+        _catalogStore = new ScreenshotCatalogStore(
+            ScreenshotCatalogStore.ResolvePathForSettings(settingsPath));
+        _folderCatalogStore = new ScreenshotFolderCatalogStore(
+            ScreenshotFolderCatalogStore.ResolvePathForSettings(settingsPath));
         _restrictToSessionRoots = restrictedScanRoots is { Count: > 0 };
         _sessionRoots = (restrictedScanRoots ?? Array.Empty<string>())
             .Select(NormalizePath)
@@ -53,7 +69,9 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        _scanCommand = new AsyncRelayCommand(_ => ScanAsync(), _ => !IsScanning);
+        _scanCommand = new AsyncRelayCommand(
+            _ => ScanAsync(),
+            _ => !IsScanning && !_isRestoringCatalog);
         _cancelScanCommand = new RelayCommand(_ => CancelScan(), _ => IsScanning);
         _previousPageCommand = new RelayCommand(_ => SetPage(PageIndex - 1), _ => PageIndex > 0);
         _nextPageCommand = new RelayCommand(_ => SetPage(PageIndex + 1), _ => PageIndex + 1 < PageCount);
@@ -61,13 +79,26 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             parameter => parameter is FolderViewModel folder
                 ? RemoveCustomRootAsync(folder)
                 : Task.CompletedTask,
-            parameter => parameter is FolderViewModel { CanRemove: true } && !IsScanning);
+            parameter => parameter is FolderViewModel { CanRemove: true } &&
+                         !IsScanning &&
+                         !_isRestoringCatalog);
 
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background);
         _refreshTimer.Tick += RefreshTimerOnTick;
+        _searchTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(250)
+        };
+        _searchTimer.Tick += SearchTimerOnTick;
     }
 
     public ObservableCollection<FolderViewModel> Folders { get; } = new();
+    public IReadOnlyList<FolderViewModel> VisibleFolders
+    {
+        get => _visibleFolders;
+        private set => SetProperty(ref _visibleFolders, value);
+    }
+
     public ObservableCollection<ScreenshotItemViewModel> VisibleItems { get; } = new();
     public IReadOnlyList<int> RefreshIntervals { get; } = [1, 5, 10, 30, 60];
 
@@ -86,7 +117,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             {
                 OnPropertyChanged(nameof(CollectionTitle));
                 OnPropertyChanged(nameof(CollectionSubtitle));
-                ApplyFilter(resetPage: true);
+                if (!_isRebuildingFolders)
+                {
+                    ApplyFilter(resetPage: true);
+                }
             }
         }
     }
@@ -98,7 +132,8 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _searchText, value))
             {
-                ApplyFilter(resetPage: true);
+                _searchTimer.Stop();
+                _searchTimer.Start();
             }
         }
     }
@@ -133,7 +168,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
 
             OnPropertyChanged(nameof(IsLoading));
             OnPropertyChanged(nameof(IsEmpty));
+            OnPropertyChanged(nameof(IsFolderOnlyEmpty));
             OnPropertyChanged(nameof(CanEditFolders));
+            OnPropertyChanged(nameof(LoadingTitle));
+            OnPropertyChanged(nameof(LoadingDetail));
             _scanCommand.RaiseCanExecuteChanged();
             _cancelScanCommand.RaiseCanExecuteChanged();
             _removeRootCommand.RaiseCanExecuteChanged();
@@ -179,6 +217,40 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    public bool FolderOnlyMode
+    {
+        get => _folderOnlyMode;
+        set
+        {
+            if (!SetProperty(ref _folderOnlyMode, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(IsGalleryMode));
+            OnPropertyChanged(nameof(IsFolderOnlyMode));
+            OnPropertyChanged(nameof(CollectionTitle));
+            OnPropertyChanged(nameof(SearchPrompt));
+            OnPropertyChanged(nameof(SearchTooltip));
+            if (Folders.FirstOrDefault() is { IsAll: true } allFolder)
+            {
+                allFolder.DisplayName = value ? AppText.AllDetectedFolders : AppText.AllScreenshots;
+            }
+
+            if (!_isApplyingSettings)
+            {
+                _settings.FolderOnlyMode = value;
+                _ = SaveSettingsQuietlyAsync();
+            }
+
+            ApplyFilter(resetPage: true);
+            if (!value && _isInitialized && !_imageCatalogLoaded)
+            {
+                _ = EnsureGalleryCatalogLoadedAsync();
+            }
+        }
+    }
+
     public int PageIndex
     {
         get => _pageIndex;
@@ -195,17 +267,32 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     public int PageCount => Math.Max(1, (int)Math.Ceiling(_filteredRecords.Count / (double)PageSize));
-    public bool IsLoading => IsScanning && _records.Count == 0;
-    public bool CanEditFolders => !IsScanning;
+    public bool IsLoading => (IsScanning && _records.Count == 0) || _isRestoringCatalog;
+    public bool CanEditFolders => !IsScanning && !_isRestoringCatalog;
     public bool HasVisibleItems => VisibleItems.Count > 0;
-    public bool IsEmpty => !IsScanning && VisibleItems.Count == 0;
-    public bool HasMultiplePages => PageCount > 1;
+    public bool IsEmpty => IsGalleryMode && !IsScanning && !IsLoading && VisibleItems.Count == 0;
+    public bool IsFolderOnlyEmpty => IsFolderOnlyMode && !IsScanning && !IsLoading && VisibleFolders.Count == 0;
+    public bool HasMultiplePages => IsGalleryMode && PageCount > 1;
+    public bool IsGalleryMode => !FolderOnlyMode;
+    public bool IsFolderOnlyMode => FolderOnlyMode;
+    public string LoadingTitle => _isRestoringCatalog ? AppText.LoadingSavedList : AppText.SearchingScreenshots;
+    public string LoadingDetail => _isRestoringCatalog ? AppText.LoadingSavedListDetail : AppText.SearchingDeepLocations;
 
-    public string CollectionTitle => SelectedFolder?.DisplayName ?? AppText.AllScreenshots;
+    public string CollectionTitle => FolderOnlyMode
+        ? SelectedFolder is { IsAll: false } folder
+            ? folder.DisplayName
+            : AppText.FolderOnlyTitle
+        : SelectedFolder?.DisplayName ?? AppText.AllScreenshots;
 
-    public string CollectionSubtitle => _filteredRecords.Count == 0
-        ? AppText.NoScreenshotsYet
-        : AppText.CollectionSummary(_filteredRecords.Count);
+    public string CollectionSubtitle => FolderOnlyMode
+        ? AppText.FolderSummary(VisibleFolders.Count)
+        : _filteredRecords.Count == 0
+            ? AppText.NoScreenshotsYet
+            : AppText.CollectionSummary(_filteredRecords.Count);
+
+    public string SearchPrompt => FolderOnlyMode ? AppText.SearchFoldersPrompt : AppText.SearchPrompt;
+
+    public string SearchTooltip => FolderOnlyMode ? AppText.SearchFoldersTooltip : AppText.SearchTooltip;
 
     public string PageText => $"{PageIndex + 1} / {PageCount}";
 
@@ -224,16 +311,28 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
-    public string EmptyTitle => _records.Count switch
-    {
-        0 => AppText.EmptyNotFound,
-        _ when !string.IsNullOrWhiteSpace(SearchText) => AppText.EmptySearch,
-        _ => AppText.EmptyCollection
-    };
+    public string EmptyTitle => !_imageCatalogLoaded && _knownScreenshotCount > 0
+        ? AppText.GalleryListUnavailable
+        : _records.Count switch
+        {
+            0 => AppText.EmptyNotFound,
+            _ when !string.IsNullOrWhiteSpace(SearchText) => AppText.EmptySearch,
+            _ => AppText.EmptyCollection
+        };
 
-    public string EmptyDetail => _records.Count == 0
-        ? AppText.EmptyInitialHint
-        : AppText.EmptyFilteredHint;
+    public string EmptyDetail => !_imageCatalogLoaded && _knownScreenshotCount > 0
+        ? AppText.GalleryListUnavailableHint
+        : _records.Count == 0
+            ? AppText.EmptyInitialHint
+            : AppText.EmptyFilteredHint;
+
+    public string FolderEmptyTitle => string.IsNullOrWhiteSpace(SearchText)
+        ? AppText.EmptyFoldersNotFound
+        : AppText.EmptyFolderSearch;
+
+    public string FolderEmptyDetail => string.IsNullOrWhiteSpace(SearchText)
+        ? AppText.EmptyFoldersHint
+        : AppText.EmptyFolderSearchHint;
 
     public async Task InitializeAsync()
     {
@@ -243,38 +342,87 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         _isInitialized = true;
+        SetRestoringCatalog(true);
         try
         {
             _settings = await _settingsStore.LoadAsync();
         }
         catch (Exception exception)
         {
-            _settings = new HubSettings();
+            _settings = HubSettings.CreateDefault();
             StatusText = AppText.SettingsLoadFailed;
             StatusDetail = exception.Message;
         }
 
         _isApplyingSettings = true;
+        FolderOnlyMode = _settings.FolderOnlyMode;
         AutoRefresh = _settings.AutoRefresh;
         AutoRefreshMinutes = _settings.AutoRefreshMinutes;
         _isApplyingSettings = false;
-        ConfigureRefreshTimer();
-
-        if (_settings.ScanOnStartup || _restrictToSessionRoots)
+        if (_restrictToSessionRoots)
         {
+            SetRestoringCatalog(false);
             await ScanAsync();
+            return;
         }
-        else
+
+        var scanRequired = false;
+        try
         {
-            RebuildFolders([], BuildRoots());
-            StatusText = AppText.WaitingToScan;
-            StatusDetail = AppText.WaitingToScanDetail;
+            var folderCatalog = await _folderCatalogStore.LoadAsync();
+            _folderCatalogScanUtc = folderCatalog?.LastSuccessfulScanUtc;
+            if (FolderOnlyMode && folderCatalog is not null)
+            {
+                ApplyFolderCatalog(folderCatalog);
+            }
+            else
+            {
+                var catalog = await _catalogStore.LoadAsync();
+                if (catalog is not null)
+                {
+                    ApplyCatalog(catalog);
+                    if (_folderCatalogScanUtc is null ||
+                        _folderCatalogScanUtc.Value < catalog.LastSuccessfulScanUtc)
+                    {
+                        await SaveFolderCatalogQuietlyAsync(catalog);
+                    }
+
+                    if (_folderCatalogScanUtc is { } folderScanUtc &&
+                        folderScanUtc > catalog.LastSuccessfulScanUtc)
+                    {
+                        StatusDetail = AppText.GalleryListOlderThanFolders;
+                    }
+                }
+                else if (folderCatalog is not null)
+                {
+                    ApplyFolderCatalog(folderCatalog);
+                    StatusText = AppText.SavedFoldersLoaded(folderCatalog.Folders.Count);
+                    StatusDetail = AppText.UseLightweightOrRescan;
+                }
+                else
+                {
+                    _hasPersistedCatalog = false;
+                    scanRequired = true;
+                }
+            }
         }
+        finally
+        {
+            SetRestoringCatalog(false);
+        }
+
+        if (!scanRequired)
+        {
+            ConfigureRefreshTimer();
+            return;
+        }
+
+        await ScanAsync();
     }
 
     public async Task AddCustomRootAsync(string folderPath)
     {
-        if (IsScanning)
+        if (IsScanning || _isRestoringCatalog)
         {
             StatusText = AppText.CannotAddWhileScanning;
             StatusDetail = AppText.CannotAddWhileScanningDetail;
@@ -310,6 +458,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         await SaveSettingsQuietlyAsync();
+        ReconcileCurrentViewWithSettings();
         await ScanAsync();
     }
 
@@ -347,34 +496,96 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
                 progress,
                 cancellationToken);
 
+            var completedUtc = DateTime.UtcNow;
             cancellationToken.ThrowIfCancellationRequested();
-            _records.Clear();
-            var ignoredRoots = _settings.IgnoredRoots
-                .Select(NormalizePath)
-                .Where(path => path is not null)
-                .Cast<string>()
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            _records.AddRange(result.Screenshots
-                .Where(record => !ignoredRoots.Any(root => IsSameOrDescendant(record.FilePath, root)))
-                .OrderByDescending(record => record.LastWriteTimeUtc)
-                .ThenBy(record => record.FilePath, StringComparer.OrdinalIgnoreCase));
+            var keepPreviousCatalog = !_restrictToSessionRoots &&
+                                      result.Warnings.Count > 0 &&
+                                      _hasPersistedCatalog;
+            if (keepPreviousCatalog)
+            {
+                ReconcileCurrentViewWithSettings();
+                StatusText = AppText.ScreenshotsFound(_knownScreenshotCount);
+                StatusDetail = AppText.CatalogKeptAfterWarnings(result.Warnings.Count);
+            }
+            else
+            {
+                _records.Clear();
+                var ignoredRoots = GetIgnoredPaths();
+                _records.AddRange(result.Screenshots
+                    .Where(record => !ignoredRoots.Any(root => IsSameOrDescendant(record.FilePath, root)))
+                    .OrderByDescending(record => record.LastWriteTimeUtc)
+                    .ThenBy(record => record.FilePath, StringComparer.OrdinalIgnoreCase));
+                _knownScreenshotCount = _records.Count;
+                _catalogScanUtc = completedUtc;
+                _imageCatalogLoaded = true;
+                RebuildFolders(_records, result.ScannedRoots);
+                ApplyFilter(resetPage: true);
 
-            RebuildFolders(_records, result.ScannedRoots);
-            ApplyFilter(resetPage: true);
+                LastUpdatedText = AppText.LastScanned(completedUtc.ToLocalTime());
+                StatusText = AppText.ScreenshotsFound(_records.Count);
+                StatusDetail = result.Warnings.Count == 0
+                    ? AppText.FoldersChecked(result.DirectoriesVisited, FormatDuration(result.Duration))
+                    : AppText.CompletedWithWarnings(result.Warnings.Count);
 
-            LastUpdatedText = AppText.Updated(DateTime.Now);
-            StatusText = AppText.ScreenshotsFound(_records.Count);
-            StatusDetail = result.Warnings.Count == 0
-                ? AppText.FoldersChecked(result.DirectoriesVisited, FormatDuration(result.Duration))
-                : AppText.CompletedWithWarnings(result.Warnings.Count);
+                if (!_restrictToSessionRoots)
+                {
+                    Exception? catalogSaveError = null;
+                    try
+                    {
+                        await _folderCatalogStore.SaveAsync(
+                            ScreenshotFolderCatalogStore.Create(
+                                _records,
+                                result.ScannedRoots,
+                                completedUtc),
+                            cancellationToken);
+                        _folderCatalogScanUtc = completedUtc;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception exception)
+                    {
+                        catalogSaveError = exception;
+                    }
+
+                    if (catalogSaveError is null)
+                    {
+                        try
+                        {
+                            var imageCatalog = ScreenshotCatalogStore.Create(
+                                _records,
+                                result.ScannedRoots,
+                                completedUtc);
+                            await _catalogStore.SaveAsync(
+                                imageCatalog,
+                                cancellationToken);
+                            _hasPersistedCatalog = true;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception exception)
+                        {
+                            catalogSaveError = exception;
+                        }
+                    }
+
+                    if (catalogSaveError is not null)
+                    {
+                        StatusText = AppText.CatalogSaveFailed;
+                        StatusDetail = catalogSaveError.Message;
+                    }
+                }
+            }
         }
         catch (OperationCanceledException)
         {
             StatusText = AppText.ScanCancelled;
-            StatusDetail = _records.Count == 0
+            StatusDetail = _knownScreenshotCount == 0
                 ? AppText.ListNotUpdated
-                : AppText.PreviousImages(_records.Count);
+                : AppText.PreviousImages(_knownScreenshotCount);
         }
         catch (Exception exception)
         {
@@ -390,6 +601,109 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void ApplyCatalog(ScreenshotCatalog catalog)
+    {
+        var ignoredPaths = GetIgnoredPaths();
+        _records.Clear();
+        _records.AddRange(catalog.Screenshots
+            .Where(record => !ignoredPaths.Any(root => IsSameOrDescendant(record.FilePath, root))));
+        var roots = ReconcileCatalogRoots(catalog.Roots, ignoredPaths);
+        _knownScreenshotCount = _records.Count;
+        _catalogScanUtc = catalog.LastSuccessfulScanUtc;
+        _imageCatalogLoaded = true;
+        _hasPersistedCatalog = true;
+        RebuildFolders(_records, roots);
+        ApplyFilter(resetPage: true);
+        LastUpdatedText = AppText.LastScanned(catalog.LastSuccessfulScanUtc.ToLocalTime());
+        StatusText = AppText.SavedCatalogLoaded(_records.Count);
+        StatusDetail = AppText.RescanToUpdate;
+    }
+
+    private void ApplyFolderCatalog(ScreenshotFolderCatalog catalog)
+    {
+        var selectedPath = SelectedFolder?.Path;
+        var ignoredPaths = GetIgnoredPaths();
+        var customRoots = _settings.CustomRoots
+            .Select(NormalizePath)
+            .Where(path => path is not null)
+            .Cast<string>()
+            .Where(path => !ignoredPaths.Any(ignored => IsSameOrDescendant(path, ignored)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var folders = catalog.Folders
+            .Where(entry => !ignoredPaths.Any(root => IsSameOrDescendant(entry.Path, root)))
+            .Select(entry =>
+            {
+                var customRoot = customRoots
+                    .OrderByDescending(path => path.Length)
+                    .FirstOrDefault(path => IsSameOrDescendant(entry.Path, path));
+                return new FolderViewModel(entry.DisplayName, entry.Path, customRootPath: customRoot)
+                {
+                    Count = entry.Count,
+                    LatestUtc = entry.LatestUtc
+                };
+            })
+            .ToList();
+
+        foreach (var customRoot in customRoots)
+        {
+            if (folders.Any(folder =>
+                    folder.Path is not null && IsSameOrDescendant(folder.Path, customRoot)))
+            {
+                continue;
+            }
+
+            folders.Add(new FolderViewModel(
+                GetFolderName(customRoot),
+                customRoot,
+                customRootPath: customRoot));
+        }
+
+        var totalScreenshots = folders.Sum(folder => (long)folder.Count);
+        var allFolder = new FolderViewModel(
+            FolderOnlyMode ? AppText.AllDetectedFolders : AppText.AllScreenshots,
+            null,
+            isAll: true)
+        {
+            Count = (int)Math.Min(totalScreenshots, int.MaxValue),
+            LatestUtc = folders.Count > 0 ? folders.Max(folder => folder.LatestUtc) : null
+        };
+
+        Folders.Clear();
+        Folders.Add(allFolder);
+        foreach (var folder in folders
+                     .OrderByDescending(folder => folder.LatestUtc ?? DateTime.MinValue)
+                     .ThenBy(folder => folder.DisplayName, StringComparer.CurrentCultureIgnoreCase))
+        {
+            Folders.Add(folder);
+        }
+
+        _isRebuildingFolders = true;
+        try
+        {
+            SelectedFolder = selectedPath is null
+                ? allFolder
+                : Folders.FirstOrDefault(folder =>
+                    string.Equals(folder.Path, selectedPath, StringComparison.OrdinalIgnoreCase)) ?? allFolder;
+        }
+        finally
+        {
+            _isRebuildingFolders = false;
+        }
+
+        _records.Clear();
+        _filteredRecords.Clear();
+        _knownScreenshotCount = allFolder.Count;
+        _catalogScanUtc = catalog.LastSuccessfulScanUtc;
+        _folderCatalogScanUtc = catalog.LastSuccessfulScanUtc;
+        _imageCatalogLoaded = false;
+        _hasPersistedCatalog = true;
+        ApplyFilter(resetPage: true);
+        LastUpdatedText = AppText.LastScanned(catalog.LastSuccessfulScanUtc.ToLocalTime());
+        StatusText = AppText.SavedCatalogLoaded(_knownScreenshotCount);
+        StatusDetail = AppText.RescanToUpdate;
+    }
+
     private IReadOnlyList<ScanRoot> BuildRoots()
     {
         if (_restrictToSessionRoots)
@@ -400,6 +714,58 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
 
         return KnownScanRoots.Discover(_settings);
+    }
+
+    private string[] GetIgnoredPaths()
+        => _settings.IgnoredRoots
+            .Select(NormalizePath)
+            .Where(path => path is not null)
+            .Cast<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private IReadOnlyList<ScanRoot> ReconcileCatalogRoots(
+        IEnumerable<CatalogRoot> catalogRoots,
+        IReadOnlyList<string> ignoredPaths)
+    {
+        var roots = new Dictionary<string, ScanRoot>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in catalogRoots)
+        {
+            var path = NormalizePath(root.Path);
+            if (path is null || ignoredPaths.Any(ignored => IsSameOrDescendant(path, ignored)))
+            {
+                continue;
+            }
+
+            roots[path] = new ScanRoot(path, root.DisplayName, root.IsCustom)
+            {
+                GameNameHint = root.GameNameHint,
+                IgnoredPaths = ignoredPaths
+            };
+        }
+
+        foreach (var customRootValue in _settings.CustomRoots)
+        {
+            var path = NormalizePath(customRootValue);
+            if (path is null || ignoredPaths.Any(ignored => IsSameOrDescendant(path, ignored)))
+            {
+                continue;
+            }
+
+            if (roots.TryGetValue(path, out var existing))
+            {
+                roots[path] = existing with { IsCustom = true };
+            }
+            else
+            {
+                roots[path] = new ScanRoot(path, GetFolderName(path), true)
+                {
+                    IgnoredPaths = ignoredPaths
+                };
+            }
+        }
+
+        return roots.Values.ToArray();
     }
 
     private void RebuildFolders(
@@ -418,13 +784,22 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             .GroupBy(record => record.LibraryFolder, StringComparer.OrdinalIgnoreCase)
             .Select(group =>
             {
+                var matchingRoot = scannedRoots
+                    .OrderByDescending(root => root.Path.Length)
+                    .FirstOrDefault(root => IsSameOrDescendant(group.Key, root.Path));
                 var customRoot = customRoots
                     .OrderByDescending(path => path.Length)
                     .FirstOrDefault(path => IsSameOrDescendant(group.Key, path));
-                var displayName = group
+                var recordName = group
                     .Select(record => record.GameName)
                     .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name))
                     ?? GetFolderName(group.Key);
+                var displayName = !string.IsNullOrWhiteSpace(matchingRoot?.GameNameHint)
+                    ? matchingRoot.GameNameHint!
+                    : matchingRoot is not null &&
+                      string.Equals(group.Key, matchingRoot.Path, StringComparison.OrdinalIgnoreCase)
+                        ? matchingRoot.DisplayName
+                        : recordName;
 
                 return new FolderViewModel(displayName, group.Key, customRootPath: customRoot)
                 {
@@ -434,7 +809,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             })
             .ToList();
 
-        foreach (var root in scannedRoots)
+        foreach (var root in scannedRoots.Where(root => root.IsCustom))
         {
             if (folders.Any(folder =>
                     folder.Path is not null && IsSameOrDescendant(folder.Path, root.Path)))
@@ -448,7 +823,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
                 customRootPath: root.IsCustom ? root.Path : null));
         }
 
-        var allFolder = new FolderViewModel(AppText.AllScreenshots, null, isAll: true)
+        var allFolder = new FolderViewModel(
+            FolderOnlyMode ? AppText.AllDetectedFolders : AppText.AllScreenshots,
+            null,
+            isAll: true)
         {
             Count = records.Count,
             LatestUtc = records.Count > 0 ? records.Max(record => record.LastWriteTimeUtc) : null
@@ -463,10 +841,18 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             Folders.Add(folder);
         }
 
-        SelectedFolder = selectedPath is null
-            ? allFolder
-            : Folders.FirstOrDefault(folder =>
-                string.Equals(folder.Path, selectedPath, StringComparison.OrdinalIgnoreCase)) ?? allFolder;
+        _isRebuildingFolders = true;
+        try
+        {
+            SelectedFolder = selectedPath is null
+                ? allFolder
+                : Folders.FirstOrDefault(folder =>
+                    string.Equals(folder.Path, selectedPath, StringComparison.OrdinalIgnoreCase)) ?? allFolder;
+        }
+        finally
+        {
+            _isRebuildingFolders = false;
+        }
     }
 
     private void ApplyFilter(bool resetPage)
@@ -476,8 +862,32 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             PageIndex = 0;
         }
 
-        var folderPath = SelectedFolder?.Path;
         var query = SearchText.Trim();
+
+        if (FolderOnlyMode)
+        {
+            _thumbnailCancellation?.Cancel();
+            _thumbnailCancellation?.Dispose();
+            _thumbnailCancellation = null;
+            _thumbnailService.Clear();
+            VisibleItems.Clear();
+            var selectedPath = SelectedFolder?.Path;
+            VisibleFolders = Folders.Where(folder =>
+                    !folder.IsAll &&
+                    (string.IsNullOrWhiteSpace(selectedPath) ||
+                     string.Equals(folder.Path, selectedPath, StringComparison.OrdinalIgnoreCase)) &&
+                    (query.Length == 0 ||
+                     folder.DisplayName.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
+                     (folder.Path?.Contains(query, StringComparison.CurrentCultureIgnoreCase) ?? false)))
+                .ToArray();
+
+            _filteredRecords.Clear();
+            NotifyGalleryStateChanged();
+            return;
+        }
+
+        VisibleFolders = [];
+        var folderPath = SelectedFolder?.Path;
 
         _filteredRecords.Clear();
         _filteredRecords.AddRange(_records.Where(record =>
@@ -548,8 +958,93 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void SearchTimerOnTick(object? sender, EventArgs e)
+    {
+        _searchTimer.Stop();
+        ApplyFilter(resetPage: true);
+    }
+
+    private async Task EnsureGalleryCatalogLoadedAsync()
+    {
+        if (_imageCatalogLoaded || _isRestoringCatalog || FolderOnlyMode)
+        {
+            return;
+        }
+
+        _refreshTimer.Stop();
+        SetRestoringCatalog(true);
+        var scanRequired = false;
+        try
+        {
+            var catalog = await _catalogStore.LoadAsync();
+            if (catalog is not null)
+            {
+                if (!FolderOnlyMode)
+                {
+                    ApplyCatalog(catalog);
+                    if (_folderCatalogScanUtc is { } folderScanUtc &&
+                        folderScanUtc > catalog.LastSuccessfulScanUtc)
+                    {
+                        StatusDetail = AppText.GalleryListOlderThanFolders;
+                    }
+                }
+            }
+            else if (_folderCatalogScanUtc is not null || Folders.Count > 0)
+            {
+                StatusText = AppText.SavedFoldersLoaded(
+                    Folders.Count(folder => !folder.IsAll));
+                StatusDetail = AppText.UseLightweightOrRescan;
+            }
+            else
+            {
+                _hasPersistedCatalog = false;
+                scanRequired = !FolderOnlyMode;
+            }
+        }
+        catch (Exception exception)
+        {
+            StatusText = AppText.ScanFailed;
+            StatusDetail = exception.Message;
+        }
+        finally
+        {
+            SetRestoringCatalog(false);
+            ConfigureRefreshTimer();
+        }
+
+        if (scanRequired && !FolderOnlyMode)
+        {
+            await ScanAsync();
+        }
+    }
+
+    private async Task SaveFolderCatalogQuietlyAsync(ScreenshotCatalog catalog)
+    {
+        try
+        {
+            var ignoredPaths = GetIgnoredPaths();
+            var roots = ReconcileCatalogRoots(catalog.Roots, ignoredPaths);
+            await _folderCatalogStore.SaveAsync(
+                ScreenshotFolderCatalogStore.Create(
+                    _records,
+                    roots,
+                    catalog.LastSuccessfulScanUtc));
+            _folderCatalogScanUtc = catalog.LastSuccessfulScanUtc;
+        }
+        catch (Exception exception)
+        {
+            StatusText = AppText.CatalogSaveFailed;
+            StatusDetail = exception.Message;
+        }
+    }
+
     private async Task RemoveCustomRootAsync(FolderViewModel folder)
     {
+        if (_isRestoringCatalog || IsScanning)
+        {
+            return;
+        }
+
         if (folder.CustomRootPath is not { Length: > 0 } rootPath)
         {
             return;
@@ -566,7 +1061,72 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         _sessionRoots.RemoveAll(path =>
             string.Equals(path, normalizedRoot, StringComparison.OrdinalIgnoreCase));
         await SaveSettingsQuietlyAsync();
+        ReconcileCurrentViewWithSettings();
         await ScanAsync();
+    }
+
+    private void ReconcileCurrentViewWithSettings()
+    {
+        if (_catalogScanUtc == default || Folders.Count == 0)
+        {
+            return;
+        }
+
+        if (!_imageCatalogLoaded)
+        {
+            var entries = Folders
+                .Where(folder => !folder.IsAll && folder.Path is not null)
+                .Select(folder => new FolderCatalogEntry(
+                    folder.Path!,
+                    folder.DisplayName,
+                    folder.CanRemove,
+                    folder.Count,
+                    folder.LatestUtc))
+                .ToList();
+            ApplyFolderCatalog(new ScreenshotFolderCatalog
+            {
+                FormatVersion = ScreenshotFolderCatalogStore.CurrentFormatVersion,
+                LastSuccessfulScanUtc = _catalogScanUtc,
+                Folders = entries,
+                TotalScreenshots = (int)Math.Min(
+                    entries.Sum(entry => (long)entry.Count),
+                    int.MaxValue)
+            });
+            return;
+        }
+
+        var ignoredPaths = GetIgnoredPaths();
+        _records.RemoveAll(record =>
+            ignoredPaths.Any(root => IsSameOrDescendant(record.FilePath, root)));
+        var cachedRoots = Folders
+            .Where(folder => !folder.IsAll && folder.Path is not null)
+            .Select(folder => new CatalogRoot(
+                folder.Path!,
+                folder.DisplayName,
+                folder.CanRemove,
+                null));
+        var roots = ReconcileCatalogRoots(cachedRoots, ignoredPaths);
+        _knownScreenshotCount = _records.Count;
+        RebuildFolders(_records, roots);
+        ApplyFilter(resetPage: true);
+    }
+
+    private void SetRestoringCatalog(bool value)
+    {
+        if (_isRestoringCatalog == value)
+        {
+            return;
+        }
+
+        _isRestoringCatalog = value;
+        OnPropertyChanged(nameof(IsLoading));
+        OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(IsFolderOnlyEmpty));
+        OnPropertyChanged(nameof(CanEditFolders));
+        OnPropertyChanged(nameof(LoadingTitle));
+        OnPropertyChanged(nameof(LoadingDetail));
+        _scanCommand.RaiseCanExecuteChanged();
+        _removeRootCommand.RaiseCanExecuteChanged();
     }
 
     private async Task SaveSettingsQuietlyAsync()
@@ -585,7 +1145,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     private void ConfigureRefreshTimer()
     {
         _refreshTimer.Stop();
-        if (!AutoRefresh || IsScanning || !_isInitialized)
+        if (!AutoRefresh || IsScanning || _isRestoringCatalog || !_isInitialized)
         {
             return;
         }
@@ -607,10 +1167,13 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(ResultRangeText));
         OnPropertyChanged(nameof(HasVisibleItems));
         OnPropertyChanged(nameof(IsEmpty));
+        OnPropertyChanged(nameof(IsFolderOnlyEmpty));
         OnPropertyChanged(nameof(HasMultiplePages));
         OnPropertyChanged(nameof(CollectionSubtitle));
         OnPropertyChanged(nameof(EmptyTitle));
         OnPropertyChanged(nameof(EmptyDetail));
+        OnPropertyChanged(nameof(FolderEmptyTitle));
+        OnPropertyChanged(nameof(FolderEmptyDetail));
         _previousPageCommand.RaiseCanExecuteChanged();
         _nextPageCommand.RaiseCanExecuteChanged();
     }
@@ -680,10 +1243,11 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     {
         _refreshTimer.Stop();
         _refreshTimer.Tick -= RefreshTimerOnTick;
+        _searchTimer.Stop();
+        _searchTimer.Tick -= SearchTimerOnTick;
         _scanCancellation?.Cancel();
         _scanCancellation?.Dispose();
         _thumbnailCancellation?.Cancel();
         _thumbnailCancellation?.Dispose();
-
     }
 }

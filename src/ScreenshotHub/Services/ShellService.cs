@@ -37,5 +37,20 @@ internal static class ShellService
         return true;
     }
 
+    public static bool OpenFolder(string folderPath)
+    {
+        if (!Directory.Exists(folderPath))
+        {
+            return false;
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = folderPath,
+            UseShellExecute = true
+        });
+        return true;
+    }
+
     public static void CopyPath(string filePath) => Clipboard.SetText(filePath);
 }

@@ -10,7 +10,7 @@ internal sealed class ThumbnailService
     private readonly object _cacheLock = new();
     private readonly Dictionary<string, CacheEntry> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly LinkedList<string> _lru = new();
-    private readonly SemaphoreSlim _decodeSlots = new(6, 6);
+    private readonly SemaphoreSlim _decodeSlots = new(2, 2);
 
     public async Task<ImageSource?> GetAsync(
         string filePath,
@@ -35,6 +35,7 @@ internal sealed class ThumbnailService
             var thumbnail = await Task.Run(
                 () => Decode(filePath),
                 cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (thumbnail is not null)
             {
@@ -54,6 +55,15 @@ internal sealed class ThumbnailService
         finally
         {
             _decodeSlots.Release();
+        }
+    }
+
+    public void Clear()
+    {
+        lock (_cacheLock)
+        {
+            _cache.Clear();
+            _lru.Clear();
         }
     }
 

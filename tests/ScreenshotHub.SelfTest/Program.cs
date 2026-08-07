@@ -14,6 +14,9 @@ try
     await RunPackagesDiscoveryTestAsync(testRoot);
     await RunReparseRootTestWhenSupportedAsync(testRoot);
     await RunInstalledGameDiscoveryTestsAsync(testRoot);
+    await RunCatalogStoreTestsAsync(testRoot);
+    await RunFolderCatalogStoreTestsAsync(testRoot);
+    await RunFullCatalogSemanticValidationTestsAsync(testRoot);
     await RunSettingsTestsAsync(testRoot);
     Console.WriteLine("SCREENSHOT_HUB_SELF_TEST_SUCCESS");
     return 0;
@@ -287,44 +290,59 @@ static async Task RunSettingsTestsAsync(string testRoot)
     var store = new SettingsStore(settingsPath);
     var first = new HubSettings
     {
+        SchemaVersion = HubSettings.CurrentSchemaVersion,
         AutoRefresh = false,
         AutoRefreshMinutes = 10,
+        FolderOnlyMode = true,
         MaxDepth = 12,
         CustomRoots = [Path.Combine(testRoot, "First")]
     };
     await store.SaveAsync(first);
     var firstLoaded = await store.LoadAsync();
-    Assert(!firstLoaded.AutoRefresh && firstLoaded.MaxDepth == 12, "Settings round trip failed.");
+    Assert(
+        !firstLoaded.AutoRefresh && firstLoaded.FolderOnlyMode && firstLoaded.MaxDepth == 12,
+        "Settings round trip, including folder-only mode, failed.");
 
     var second = new HubSettings
     {
+        SchemaVersion = HubSettings.CurrentSchemaVersion,
         AutoRefresh = true,
         AutoRefreshMinutes = 30,
+        FolderOnlyMode = false,
         MaxDepth = 6,
         CustomRoots = [Path.Combine(testRoot, "Second")]
     };
     await store.SaveAsync(second);
     var secondLoaded = await store.LoadAsync();
     Assert(
-        secondLoaded.AutoRefresh && secondLoaded.AutoRefreshMinutes == 30 && secondLoaded.MaxDepth == 6,
+        secondLoaded.AutoRefresh &&
+        !secondLoaded.FolderOnlyMode &&
+        secondLoaded.AutoRefreshMinutes == 30 &&
+        secondLoaded.MaxDepth == 6,
         "A later settings save did not become current.");
     await File.WriteAllTextAsync(settingsPath, "{ invalid json");
 
     var recovered = await store.LoadAsync();
-    Assert(!recovered.AutoRefresh && recovered.MaxDepth == 12, "Known-good settings backup was not recovered.");
+    Assert(
+        !recovered.AutoRefresh && recovered.FolderOnlyMode && recovered.MaxDepth == 12,
+        "Known-good settings backup, including folder-only mode, was not recovered.");
 
     var third = new HubSettings
     {
+        SchemaVersion = HubSettings.CurrentSchemaVersion,
         AutoRefresh = false,
         AutoRefreshMinutes = 60,
+        FolderOnlyMode = true,
         MaxDepth = 15,
         CustomRoots = [Path.Combine(testRoot, "Third")]
     };
     await store.SaveAsync(third);
     var fourth = new HubSettings
     {
+        SchemaVersion = HubSettings.CurrentSchemaVersion,
         AutoRefresh = true,
         AutoRefreshMinutes = 1,
+        FolderOnlyMode = false,
         MaxDepth = 3,
         CustomRoots = [Path.Combine(testRoot, "Fourth")]
     };
@@ -332,8 +350,137 @@ static async Task RunSettingsTestsAsync(string testRoot)
     await File.WriteAllTextAsync(settingsPath, "not json");
     var rotatedBackup = await store.LoadAsync();
     Assert(
-        !rotatedBackup.AutoRefresh && rotatedBackup.AutoRefreshMinutes == 60 && rotatedBackup.MaxDepth == 15,
+        !rotatedBackup.AutoRefresh &&
+        rotatedBackup.FolderOnlyMode &&
+        rotatedBackup.AutoRefreshMinutes == 60 &&
+        rotatedBackup.MaxDepth == 15,
         "The known-good backup did not rotate after later saves.");
+
+    var legacyPath = Path.Combine(testRoot, "Legacy AppData", "settings.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+    await File.WriteAllTextAsync(
+        legacyPath,
+        "{\"scanOnStartup\":true,\"autoRefresh\":true,\"autoRefreshMinutes\":5}");
+    var migrated = await new SettingsStore(legacyPath).LoadAsync();
+    Assert(
+        migrated.SchemaVersion == HubSettings.CurrentSchemaVersion &&
+        !migrated.AutoRefresh &&
+        migrated.AutoRefreshMinutes == 30,
+        "Legacy automatic rescans were not disabled during migration.");
+}
+
+static async Task RunCatalogStoreTestsAsync(string testRoot)
+{
+    var catalogPath = Path.Combine(testRoot, "Catalog AppData", "catalog-v1-ja-JP.json");
+    var store = new ScreenshotCatalogStore(catalogPath);
+    Assert(await store.LoadAsync() is null, "A missing catalog was not treated as an initial launch.");
+
+    var library = Path.Combine(testRoot, "Catalog", "原神", "ScreenShot");
+    var firstPath = Path.Combine(library, "最初.png");
+    var secondPath = Path.Combine(library, "次.jpg");
+    var firstUtc = new DateTime(2026, 8, 7, 1, 2, 3, DateTimeKind.Utc);
+    var firstCatalog = ScreenshotCatalogStore.Create(
+        [new ScreenshotRecord(firstPath, library, "原神", firstUtc, 1234)],
+        [new ScanRoot(library, "原神") { GameNameHint = "原神" }],
+        firstUtc);
+    await store.SaveAsync(firstCatalog);
+
+    var loaded = await store.LoadAsync() ??
+                 throw new InvalidOperationException("A saved catalog could not be loaded.");
+    Assert(loaded.Screenshots.Count == 1, "Catalog screenshot round trip failed.");
+    Assert(loaded.Screenshots[0].GameName == "原神", "Catalog Unicode text was not preserved.");
+    Assert(loaded.Screenshots[0].LastWriteTimeUtc == firstUtc, "Catalog UTC timestamp changed.");
+    Assert(loaded.Roots.Count == 1 && loaded.Roots[0].GameNameHint == "原神", "Catalog roots round trip failed.");
+
+    var secondUtc = firstUtc.AddMinutes(1);
+    var secondCatalog = ScreenshotCatalogStore.Create(
+        [
+            new ScreenshotRecord(firstPath, library, "原神", firstUtc, 1234),
+            new ScreenshotRecord(secondPath, library, "原神", secondUtc, 5678)
+        ],
+        [new ScanRoot(library, "原神") { GameNameHint = "原神" }],
+        secondUtc);
+    await store.SaveAsync(secondCatalog);
+    await File.WriteAllTextAsync(catalogPath, "{ invalid json");
+
+    var recovered = await store.LoadAsync() ??
+                    throw new InvalidOperationException("The catalog backup was not used after primary corruption.");
+    Assert(recovered.Screenshots.Count == 1, "Catalog backup did not contain the prior known-good snapshot.");
+
+    var emptyPath = Path.Combine(testRoot, "Empty Catalog", "catalog.json");
+    var emptyStore = new ScreenshotCatalogStore(emptyPath);
+    await emptyStore.SaveAsync(ScreenshotCatalogStore.Create([], [], DateTime.UtcNow));
+    var empty = await emptyStore.LoadAsync();
+    Assert(empty is not null && empty.Screenshots.Count == 0, "A completed zero-image scan was mistaken for an initial launch.");
+}
+
+static async Task RunFolderCatalogStoreTestsAsync(string testRoot)
+{
+    var catalogPath = Path.Combine(testRoot, "Folder Catalog AppData", "folders-v1-ja-JP.json");
+    var store = new ScreenshotFolderCatalogStore(catalogPath);
+    Assert(await store.LoadAsync() is null, "A missing folder catalog was not treated as an initial launch.");
+
+    var library = Path.Combine(testRoot, "フォルダー一覧", "原神", "スクリーンショット");
+    var firstUtc = new DateTime(2026, 8, 7, 4, 5, 6, DateTimeKind.Utc);
+    var latestUtc = firstUtc.AddMinutes(2);
+    var catalog = ScreenshotFolderCatalogStore.Create(
+        [
+            new ScreenshotRecord(Path.Combine(library, "最初.png"), library, "原神・撮影記録", firstUtc, 100),
+            new ScreenshotRecord(Path.Combine(library, "次.jpg"), library, "原神・撮影記録", latestUtc, 200)
+        ],
+        [new ScanRoot(library, "原神・スクリーンショット", true) { GameNameHint = "原神・撮影記録" }],
+        latestUtc);
+
+    await store.SaveAsync(catalog);
+    var loaded = await store.LoadAsync() ??
+                 throw new InvalidOperationException("A saved folder catalog could not be loaded.");
+    Assert(loaded.TotalScreenshots == 2, "Folder catalog total screenshot count changed.");
+    Assert(loaded.Folders.Count == 1, "Folder catalog unexpectedly changed the folder count.");
+    var summary = loaded.Folders[0];
+    Assert(summary.Path == Path.GetFullPath(library), "Folder catalog Unicode path was not preserved.");
+    Assert(summary.DisplayName == "原神・撮影記録", "Folder catalog Unicode display name was not preserved.");
+    Assert(summary.IsCustom && summary.Count == 2, "Folder catalog summary fields changed.");
+    Assert(summary.LatestUtc == latestUtc, "Folder catalog latest UTC timestamp changed.");
+}
+
+static async Task RunFullCatalogSemanticValidationTestsAsync(string testRoot)
+{
+    var catalogPath = Path.Combine(testRoot, "Semantic Catalog", "catalog.json");
+    var store = new ScreenshotCatalogStore(catalogPath);
+    var library = Path.Combine(testRoot, "Semantic Catalog", "原神", "Screenshots");
+    var firstUtc = new DateTime(2026, 8, 7, 7, 8, 9, DateTimeKind.Utc);
+    var validPath = Path.Combine(library, "known-good.png");
+    var currentPath = Path.Combine(library, "newer.png");
+
+    await store.SaveAsync(ScreenshotCatalogStore.Create(
+        [new ScreenshotRecord(validPath, library, "原神", firstUtc, 123)],
+        [new ScanRoot(library, "原神") { GameNameHint = "原神" }],
+        firstUtc));
+    await store.SaveAsync(ScreenshotCatalogStore.Create(
+        [new ScreenshotRecord(currentPath, library, "原神", firstUtc.AddMinutes(1), 456)],
+        [new ScanRoot(library, "原神") { GameNameHint = "原神" }],
+        firstUtc.AddMinutes(1)));
+
+    var semanticallyInvalid = ScreenshotCatalogStore.Create(
+        [new ScreenshotRecord(Path.Combine(library, "not-an-image.txt"), library, "原神", firstUtc, 123)],
+        [new ScanRoot(library, "原神") { GameNameHint = "原神" }],
+        firstUtc);
+    Directory.CreateDirectory(Path.GetDirectoryName(catalogPath)!);
+    await File.WriteAllTextAsync(catalogPath, JsonSerializer.Serialize(semanticallyInvalid));
+
+    var recovered = await store.LoadAsync() ??
+                    throw new InvalidOperationException("A semantic catalog error did not fall back to the backup.");
+    Assert(
+        recovered.Screenshots.Count == 1 &&
+        recovered.Screenshots[0].FilePath.Equals(validPath, StringComparison.OrdinalIgnoreCase),
+        "A semantic catalog error did not recover the prior known-good catalog.");
+
+    var noBackupPath = Path.Combine(testRoot, "Semantic Catalog No Backup", "catalog.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(noBackupPath)!);
+    await File.WriteAllTextAsync(noBackupPath, JsonSerializer.Serialize(semanticallyInvalid));
+    Assert(
+        await new ScreenshotCatalogStore(noBackupPath).LoadAsync() is null,
+        "A semantically invalid catalog without a backup was not rejected as null.");
 }
 
 static void Assert(bool condition, string message)
