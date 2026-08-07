@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ScreenshotHub</AssemblyName>
+    <RootNamespace>ScreenshotHub</RootNamespace>
+    <ScreenshotHubLanguage Condition="'$(ScreenshotHubLanguage)' == ''">ja-JP</ScreenshotHubLanguage>
+    <Version>0.2.0</Version>
+    <FileVersion>0.2.0.0</FileVersion>
+    <AssemblyTitle Condition="'$(ScreenshotHubLanguage)' == 'ja-JP'">スクリーンショット・ハブ</AssemblyTitle>
+    <AssemblyTitle Condition="'$(ScreenshotHubLanguage)' == 'en-US'">Screenshot Hub</AssemblyTitle>
+    <Product>Screenshot Hub</Product>
+    <Description Condition="'$(ScreenshotHubLanguage)' == 'ja-JP'">ゲームのスクリーンショット保存先を自動検出してまとめて閲覧するWindowsアプリ</Description>
+    <Description Condition="'$(ScreenshotHubLanguage)' == 'en-US'">A private local Windows gallery that automatically discovers game screenshot folders.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScreenshotHub.Core\ScreenshotHub.Core.csproj" />
+    <AssemblyMetadata Include="ScreenshotHubLanguage" Value="$(ScreenshotHubLanguage)" />
+  </ItemGroup>
+
+  <Target Name="ValidateScreenshotHubLanguage" BeforeTargets="CoreCompile"
+          Condition="'$(ScreenshotHubLanguage)' != 'ja-JP' and '$(ScreenshotHubLanguage)' != 'en-US'">
+    <Error Text="ScreenshotHubLanguage must be ja-JP or en-US." />
+  </Target>
+</Project>

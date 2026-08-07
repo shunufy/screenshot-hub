@@ -1,0 +1,33 @@
+# .NET / IDE
+**/bin/
+**/obj/
+/artifacts/
+/TestResults/
+/.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# Local diagnostics, previews, and release outputs
+/work/
+/outputs/*
+!/outputs/.gitkeep
+
+# Local secrets and signing material
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.snk
+*.pem
+*.key
+*.pubxml.user
+
+# Editors / Windows
+/.idea/
+/.vscode/
+Thumbs.db
+Desktop.ini

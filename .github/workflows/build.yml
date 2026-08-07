@@ -1,0 +1,22 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Restore
+        run: dotnet restore .\ScreenshotHub.sln
+      - name: Build Japanese
+        run: dotnet build .\ScreenshotHub.sln -c Release --no-restore
+      - name: Self-test
+        run: dotnet .\tests\ScreenshotHub.SelfTest\bin\Release\net8.0-windows\ScreenshotHub.SelfTest.dll
+      - name: Build English
+        run: dotnet build .\src\ScreenshotHub\ScreenshotHub.csproj -c Release --no-restore -p:ScreenshotHubLanguage=en-US

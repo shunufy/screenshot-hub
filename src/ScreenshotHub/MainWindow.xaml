@@ -1,0 +1,607 @@
+<Window x:Class="ScreenshotHub.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:core="clr-namespace:ScreenshotHub.Core;assembly=ScreenshotHub.Core"
+        mc:Ignorable="d"
+        Title="{x:Static core:AppText.WindowTitle}"
+        Width="1380"
+        Height="860"
+        MinWidth="1160"
+        MinHeight="660"
+        WindowStartupLocation="CenterScreen"
+        Loaded="Window_Loaded"
+        Closed="Window_Closed"
+        KeyDown="Window_KeyDown">
+    <Window.Resources>
+        <Style x:Key="SidebarListBoxItemStyle" TargetType="ListBoxItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="0,0,0,6" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Chrome"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="11"
+                                Padding="12,11">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource SurfaceHoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Chrome" Property="Background" Value="{StaticResource AccentSurfaceBrush}" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="#425D93" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ThumbnailState" TargetType="FrameworkElement">
+            <Setter Property="Visibility" Value="Collapsed" />
+        </Style>
+
+        <Style x:Key="LoadingThumbnailState" TargetType="FrameworkElement" BasedOn="{StaticResource ThumbnailState}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsThumbnailLoading}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="UnavailableThumbnailState" TargetType="FrameworkElement" BasedOn="{StaticResource ThumbnailState}">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsThumbnailUnavailable}" Value="True">
+                    <Setter Property="Visibility" Value="Visible" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="GalleryCardStyle" TargetType="Border">
+            <Setter Property="Width" Value="238" />
+            <Setter Property="Height" Value="240" />
+            <Setter Property="Margin" Value="7" />
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource OutlineBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="13" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="True" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
+                    <Setter Property="BorderBrush" Value="#45546B" />
+                </Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                    <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
+                    <Setter Property="BorderBrush" Value="{StaticResource AccentStrongBrush}" />
+                    <Setter Property="BorderThickness" Value="2" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Background="{StaticResource WindowBrush}">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="306" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Collection sidebar -->
+        <Border Grid.Column="0"
+                Background="{StaticResource SidebarBrush}"
+                BorderBrush="#202A39"
+                BorderThickness="0,0,1,0">
+            <Grid Margin="20,22,18,18">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="34" Height="34" CornerRadius="10" Background="{StaticResource AccentSurfaceBrush}">
+                            <TextBlock Text="▣"
+                                       Foreground="{StaticResource AccentStrongBrush}"
+                                       FontSize="18"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Margin="11,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="{x:Static core:AppText.WindowTitle}"
+                                       FontSize="15"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="{x:Static core:AppText.Tagline}"
+                                       Margin="0,2,0,0"
+                                       Foreground="{StaticResource TextSubtleBrush}"
+                                       FontSize="10.5" />
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+
+                <Grid Grid.Row="1" Margin="0,28,0,10">
+                    <TextBlock Text="{x:Static core:AppText.Collections}"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               FontSize="11"
+                               FontWeight="SemiBold" />
+                    <TextBlock Text="{x:Static core:AppText.DetectedAndAddedFolders}"
+                               HorizontalAlignment="Right"
+                               Foreground="{StaticResource TextSubtleBrush}"
+                               FontSize="10" />
+                </Grid>
+
+                <ListBox Grid.Row="2"
+                         ItemsSource="{Binding Folders}"
+                         SelectedItem="{Binding SelectedFolder, Mode=TwoWay}"
+                         ItemContainerStyle="{StaticResource SidebarListBoxItemStyle}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <TextBlock Text="{Binding DisplayName}"
+                                           TextTrimming="CharacterEllipsis"
+                                           FontWeight="SemiBold" />
+                                <Border Grid.Column="1"
+                                        Margin="10,0,0,0"
+                                        Padding="7,2"
+                                        CornerRadius="8"
+                                        Background="#263247">
+                                    <TextBlock Text="{Binding CountText}"
+                                               Foreground="{StaticResource AccentStrongBrush}"
+                                               FontSize="10.5"
+                                               FontWeight="SemiBold" />
+                                </Border>
+
+                                <TextBlock Grid.Row="1"
+                                           Grid.ColumnSpan="2"
+                                           Text="{Binding PathText}"
+                                           ToolTip="{Binding Path}"
+                                           Margin="0,5,0,0"
+                                           Foreground="{StaticResource TextSubtleBrush}"
+                                           FontSize="10.5"
+                                           TextTrimming="CharacterEllipsis" />
+
+                                <TextBlock Grid.Row="2"
+                                           Text="{Binding LatestText}"
+                                           Margin="0,6,0,0"
+                                           Foreground="{StaticResource TextMutedBrush}"
+                                           FontSize="10.5" />
+                                <Button Grid.Row="2"
+                                        Grid.Column="1"
+                                        Content="×"
+                                        ToolTip="{x:Static core:AppText.RemoveAddedFolderTooltip}"
+                                        Command="{Binding DataContext.RemoveRootCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        CommandParameter="{Binding}"
+                                        Margin="8,3,0,-4"
+                                        Width="25"
+                                        Height="25"
+                                        Padding="0"
+                                        Foreground="{StaticResource TextMutedBrush}"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Cursor="Hand">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding CanRemove}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}" />
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <Border Grid.Row="3"
+                        Margin="0,14,0,0"
+                        Padding="12"
+                        Background="#0D121B"
+                        BorderBrush="#202A39"
+                        BorderThickness="1"
+                        CornerRadius="11">
+                    <StackPanel>
+                        <CheckBox Content="{x:Static core:AppText.AutoRescan}"
+                                  IsChecked="{Binding AutoRefresh, Mode=TwoWay}"
+                                  FontSize="11.5" />
+                        <DockPanel Margin="22,8,0,0" LastChildFill="True">
+                            <TextBlock Text="{x:Static core:AppText.Interval}"
+                                       DockPanel.Dock="Left"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextSubtleBrush}"
+                                       FontSize="10.5" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <ComboBox Width="58"
+                                          Height="28"
+                                          ItemsSource="{Binding RefreshIntervals}"
+                                          SelectedItem="{Binding AutoRefreshMinutes, Mode=TwoWay}"
+                                          IsEnabled="{Binding AutoRefresh}" />
+                                <TextBlock Text="{x:Static core:AppText.Minutes}"
+                                           Margin="6,0,0,0"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextSubtleBrush}"
+                                           FontSize="10.5" />
+                            </StackPanel>
+                        </DockPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- Main content -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="94" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="44" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" BorderBrush="#202A39" BorderThickness="0,0,0,1">
+                <Grid Margin="25,17,24,15">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="180" />
+                        <ColumnDefinition Width="250" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding CollectionTitle}"
+                                   FontSize="21"
+                                   FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding CollectionSubtitle}"
+                                   Margin="0,5,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   FontSize="11.5" />
+                    </StackPanel>
+
+                    <Grid Grid.Column="1" Margin="18,0,14,0" VerticalAlignment="Center">
+                        <TextBox x:Name="SearchBox"
+                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                 Padding="36,10,12,10"
+                                 ToolTip="{x:Static core:AppText.SearchTooltip}" />
+                        <TextBlock Text="⌕"
+                                   Margin="13,0,0,1"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   FontSize="20"
+                                   IsHitTestVisible="False" />
+                        <TextBlock Text="{x:Static core:AppText.SearchPrompt}"
+                                   Margin="37,0,0,0"
+                                   HorizontalAlignment="Left"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextSubtleBrush}"
+                                   IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SearchText}" Value="">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Content="{x:Static core:AppText.Cancel}"
+                                Command="{Binding CancelScanCommand}"
+                                Style="{StaticResource QuietButton}"
+                                Margin="0,0,8,0"
+                                Foreground="{StaticResource DangerBrush}"
+                                Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <Button Content="{x:Static core:AppText.Rescan}"
+                                Command="{Binding ScanCommand}"
+                                Style="{StaticResource QuietButton}"
+                                Margin="0,0,8,0"
+                                ToolTip="F5" />
+                        <Button Content="{x:Static core:AppText.AddFolder}"
+                                Click="AddFolderButton_Click"
+                                IsEnabled="{Binding CanEditFolders}"
+                                Style="{StaticResource AccentButton}" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <ScrollViewer Grid.Row="0"
+                              x:Name="GalleryScroller"
+                              Padding="18,18,12,20"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              CanContentScroll="False">
+                    <ItemsControl ItemsSource="{Binding VisibleItems}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource GalleryCardStyle}"
+                                        MouseLeftButtonDown="Thumbnail_MouseLeftButtonDown"
+                                        KeyDown="Thumbnail_KeyDown">
+                                    <Border.ContextMenu>
+                                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                            <MenuItem Header="{x:Static core:AppText.OpenDefaultApp}" Click="OpenMenuItem_Click" />
+                                            <MenuItem Header="{x:Static core:AppText.ShowInExplorer}" Click="ShowInExplorerMenuItem_Click" />
+                                            <Separator />
+                                            <MenuItem Header="{x:Static core:AppText.CopyPath}" Click="CopyPathMenuItem_Click" />
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="157" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+
+                                        <Border Margin="6"
+                                                Background="#0D121B"
+                                                CornerRadius="9"
+                                                ClipToBounds="True">
+                                            <Grid>
+                                                <Image Source="{Binding Thumbnail}"
+                                                       Stretch="UniformToFill"
+                                                       RenderOptions.BitmapScalingMode="HighQuality" />
+
+                                                <StackPanel Style="{StaticResource LoadingThumbnailState}"
+                                                            HorizontalAlignment="Center"
+                                                            VerticalAlignment="Center">
+                                                    <ProgressBar Width="64"
+                                                                 Height="3"
+                                                                 IsIndeterminate="True"
+                                                                 Foreground="{StaticResource AccentBrush}"
+                                                                 Background="#263247" />
+                                                    <TextBlock Text="{x:Static core:AppText.CreatingPreview}"
+                                                               Margin="0,9,0,0"
+                                                               Foreground="{StaticResource TextSubtleBrush}"
+                                                               FontSize="10" />
+                                                </StackPanel>
+
+                                                <StackPanel Style="{StaticResource UnavailableThumbnailState}"
+                                                            HorizontalAlignment="Center"
+                                                            VerticalAlignment="Center">
+                                                    <TextBlock Text="◇"
+                                                               HorizontalAlignment="Center"
+                                                               Foreground="{StaticResource TextSubtleBrush}"
+                                                               FontSize="26" />
+                                                    <TextBlock Text="{x:Static core:AppText.PreviewUnavailable}"
+                                                               Margin="0,7,0,0"
+                                                               Foreground="{StaticResource TextSubtleBrush}"
+                                                               FontSize="10" />
+                                                </StackPanel>
+
+                                                <Border HorizontalAlignment="Left"
+                                                        VerticalAlignment="Top"
+                                                        Margin="8"
+                                                        Padding="7,3"
+                                                        CornerRadius="7"
+                                                        Background="#CC101722">
+                                                    <TextBlock Text="{Binding GameName}"
+                                                               MaxWidth="164"
+                                                               Foreground="#E5ECFA"
+                                                               FontSize="9.5"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                </Border>
+
+                                                <Border VerticalAlignment="Bottom"
+                                                        Height="34"
+                                                        Background="#B30A0D14">
+                                                    <TextBlock Text="{Binding TimeText}"
+                                                               Margin="10,0"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="#D6DEEC"
+                                                               FontSize="10.5" />
+                                                </Border>
+                                            </Grid>
+                                        </Border>
+
+                                        <Grid Grid.Row="1" Margin="12,8,12,10">
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Text="{Binding FileNameWithoutExtension}"
+                                                       ToolTip="{Binding FileName}"
+                                                       FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <Grid Grid.Row="1" Margin="0,7,0,0">
+                                                <TextBlock Text="{Binding FolderName}"
+                                                           MaxWidth="155"
+                                                           HorizontalAlignment="Left"
+                                                           Foreground="{StaticResource TextMutedBrush}"
+                                                           FontSize="10.5"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Text="{Binding SizeText}"
+                                                           HorizontalAlignment="Right"
+                                                           Foreground="{StaticResource TextSubtleBrush}"
+                                                           FontSize="10.5" />
+                                            </Grid>
+                                        </Grid>
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <!-- Loading state -->
+                <Border Grid.Row="0"
+                        Background="{StaticResource WindowBrush}"
+                        Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Border Width="64" Height="64" CornerRadius="20" Background="{StaticResource AccentSurfaceBrush}">
+                            <TextBlock Text="▣"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource AccentStrongBrush}"
+                                       FontSize="27" />
+                        </Border>
+                        <TextBlock Text="{x:Static core:AppText.SearchingScreenshots}"
+                                   Margin="0,20,0,0"
+                                   HorizontalAlignment="Center"
+                                   FontSize="17"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{x:Static core:AppText.SearchingDeepLocations}"
+                                   Margin="0,7,0,16"
+                                   Foreground="{StaticResource TextMutedBrush}" />
+                        <ProgressBar Width="210"
+                                     Height="4"
+                                     IsIndeterminate="True"
+                                     Foreground="{StaticResource AccentBrush}"
+                                     Background="#263247" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Empty state -->
+                <Border Grid.Row="0"
+                        Background="{StaticResource WindowBrush}"
+                        Visibility="{Binding IsEmpty, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Border Width="72" Height="72" CornerRadius="24" Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource OutlineBrush}" BorderThickness="1">
+                            <TextBlock Text="□"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextSubtleBrush}"
+                                       FontSize="30" />
+                        </Border>
+                        <TextBlock Text="{Binding EmptyTitle}"
+                                   Margin="0,20,0,0"
+                                   HorizontalAlignment="Center"
+                                   FontSize="17"
+                                   FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding EmptyDetail}"
+                                   Margin="0,7,0,0"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   TextAlignment="Center" />
+                        <Button Content="{x:Static core:AppText.AddFolderPlain}"
+                                Margin="0,18,0,0"
+                                Click="AddFolderButton_Click"
+                                IsEnabled="{Binding CanEditFolders}"
+                                Style="{StaticResource QuietButton}" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Paging keeps the WPF WrapPanel bounded -->
+                <Border Grid.Row="1"
+                        Padding="24,11"
+                        BorderBrush="#202A39"
+                        BorderThickness="0,1,0,0"
+                        Background="#0D1119"
+                        Visibility="{Binding HasMultiplePages, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Grid>
+                        <TextBlock Text="{Binding ResultRangeText}"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextMutedBrush}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                            <Button Content="‹"
+                                    Command="{Binding PreviousPageCommand}"
+                                    Style="{StaticResource IconButton}" />
+                            <TextBlock Text="{Binding PageText}"
+                                       MinWidth="86"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       TextAlignment="Center"
+                                       Foreground="{StaticResource TextMutedBrush}" />
+                            <Button Content="›"
+                                    Command="{Binding NextPageCommand}"
+                                    Style="{StaticResource IconButton}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- Scan status footer -->
+            <Border Grid.Row="2" Background="#0D1119" BorderBrush="#202A39" BorderThickness="0,1,0,0">
+                <Grid Margin="22,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Ellipse Width="7" Height="7" VerticalAlignment="Center">
+                        <Ellipse.Style>
+                            <Style TargetType="Ellipse">
+                                <Setter Property="Fill" Value="{StaticResource PositiveBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsScanning}" Value="True">
+                                        <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Ellipse.Style>
+                    </Ellipse>
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding StatusText}"
+                               Margin="9,0,0,0"
+                               VerticalAlignment="Center"
+                               FontSize="10.5"
+                               FontWeight="SemiBold" />
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding StatusDetail}"
+                               Margin="14,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource TextSubtleBrush}"
+                               FontSize="10.5"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock Grid.Column="3"
+                               Text="{Binding LastUpdatedText}"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource TextSubtleBrush}"
+                               FontSize="10.5" />
+                </Grid>
+            </Border>
+
+            <ProgressBar Grid.Row="2"
+                         Height="2"
+                         VerticalAlignment="Top"
+                         IsIndeterminate="True"
+                         Foreground="{StaticResource AccentBrush}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+        </Grid>
+    </Grid>
+</Window>
