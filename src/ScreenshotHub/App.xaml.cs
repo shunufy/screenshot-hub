@@ -7,9 +7,15 @@ namespace ScreenshotHub;
 
 public partial class App : Application
 {
+    internal static bool SuppressAutomaticStartupForUiSmoke { get; set; }
+
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (SuppressAutomaticStartupForUiSmoke)
+        {
+            return;
+        }
 
         var options = DiagnosticOptions.Parse(e.Args);
         if (!options.IsValid)
@@ -20,16 +26,20 @@ public partial class App : Application
             return;
         }
 
+        var settingsPath = DataLocationResolver.ResolveSettingsPath(
+            options.SettingsPath,
+            AppContext.BaseDirectory);
+
         if (options.IsDiagnosticMode)
         {
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            Environment.ExitCode = await RunDiagnosticsAsync(options);
+            Environment.ExitCode = await RunDiagnosticsAsync(options, settingsPath);
             Shutdown(Environment.ExitCode);
             return;
         }
 
         ShutdownMode = ShutdownMode.OnMainWindowClose;
-        var window = new MainWindow(options.ScanRoots, options.SettingsPath);
+        var window = new MainWindow(options.ScanRoots, settingsPath);
         MainWindow = window;
         window.Show();
     }
@@ -62,7 +72,9 @@ public partial class App : Application
         return 2;
     }
 
-    private static async Task<int> RunDiagnosticsAsync(DiagnosticOptions options)
+    private static async Task<int> RunDiagnosticsAsync(
+        DiagnosticOptions options,
+        string? settingsPath)
     {
         try
         {
@@ -75,9 +87,9 @@ public partial class App : Application
 
             if (roots.Length == 0)
             {
-                var settings = options.SettingsPath is null
+                var settings = settingsPath is null
                     ? new HubSettings()
-                    : await new SettingsStore(options.SettingsPath).LoadAsync();
+                    : await new SettingsStore(settingsPath).LoadAsync();
                 roots = KnownScanRoots.Discover(settings).ToArray();
             }
 

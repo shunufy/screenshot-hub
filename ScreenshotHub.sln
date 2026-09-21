@@ -8,6 +8,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScreenshotHub", "src\Screen
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScreenshotHub.SelfTest", "tests\ScreenshotHub.SelfTest\ScreenshotHub.SelfTest.csproj", "{CC38AB36-5E17-40E2-93A7-5978EA738F95}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ScreenshotHub.UiSmoke", "tests\ScreenshotHub.UiSmoke\ScreenshotHub.UiSmoke.csproj", "{D2E6A5E9-2F77-46D6-A2D2-A166D7071FE2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,5 +28,9 @@ Global
 		{CC38AB36-5E17-40E2-93A7-5978EA738F95}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{CC38AB36-5E17-40E2-93A7-5978EA738F95}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{CC38AB36-5E17-40E2-93A7-5978EA738F95}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D2E6A5E9-2F77-46D6-A2D2-A166D7071FE2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D2E6A5E9-2F77-46D6-A2D2-A166D7071FE2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D2E6A5E9-2F77-46D6-A2D2-A166D7071FE2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D2E6A5E9-2F77-46D6-A2D2-A166D7071FE2}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

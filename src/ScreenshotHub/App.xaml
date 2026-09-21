@@ -30,10 +30,6 @@
             <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
         </Style>
 
-        <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-        </Style>
-
         <Style x:Key="QuietButton" TargetType="Button">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="Background" Value="{StaticResource SurfaceRaisedBrush}" />
@@ -171,7 +167,9 @@
                                               HorizontalAlignment="Left"
                                               VerticalAlignment="Center"
                                               IsHitTestVisible="False"
-                                              Content="{TemplateBinding SelectionBoxItem}" />
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}" />
                             <Path Width="7"
                                   Height="4"
                                   Margin="0,0,8,0"

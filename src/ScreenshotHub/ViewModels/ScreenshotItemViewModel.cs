@@ -11,8 +11,14 @@ internal sealed class ScreenshotItemViewModel : ObservableObject
     private ImageSource? _thumbnail;
     private bool _isThumbnailLoading = true;
     private bool _isThumbnailUnavailable;
+    private bool _isFavorite;
+    private IReadOnlyList<string> _tags = [];
+    private DuplicateMembership _duplicateMembership = new(null, 0, null, 0);
 
-    public ScreenshotItemViewModel(ScreenshotRecord record)
+    public ScreenshotItemViewModel(
+        ScreenshotRecord record,
+        ScreenshotUserData? userData = null,
+        DuplicateMembership? duplicateMembership = null)
     {
         Record = record;
         FileName = System.IO.Path.GetFileName(record.FilePath);
@@ -22,6 +28,8 @@ internal sealed class ScreenshotItemViewModel : ObservableObject
             System.IO.Path.AltDirectorySeparatorChar));
         TimeText = record.LastWriteTimeUtc.ToLocalTime().ToString("yyyy/M/d  HH:mm");
         SizeText = FormatFileSize(record.FileSize);
+        ApplyUserData(userData);
+        ApplyDuplicateMembership(duplicateMembership);
     }
 
     public ScreenshotRecord Record { get; }
@@ -32,6 +40,57 @@ internal sealed class ScreenshotItemViewModel : ObservableObject
     public string GameName => Record.GameName;
     public string TimeText { get; }
     public string SizeText { get; }
+    public bool IsFavorite
+    {
+        get => _isFavorite;
+        private set
+        {
+            if (SetProperty(ref _isFavorite, value))
+            {
+                OnPropertyChanged(nameof(FavoriteGlyph));
+                OnPropertyChanged(nameof(FavoriteAutomationName));
+            }
+        }
+    }
+
+    public IReadOnlyList<string> Tags
+    {
+        get => _tags;
+        private set
+        {
+            _tags = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TagsText));
+            OnPropertyChanged(nameof(HasTags));
+        }
+    }
+
+    public string TagsText => string.Join(" · ", Tags);
+    public bool HasTags => Tags.Count > 0;
+    public string FavoriteGlyph => IsFavorite ? "★" : "☆";
+    public string FavoriteAutomationName => IsFavorite ? AppText.RemoveFavorite : AppText.AddFavorite;
+    public DuplicateMembership DuplicateMembership
+    {
+        get => _duplicateMembership;
+        private set
+        {
+            _duplicateMembership = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsExactDuplicate));
+            OnPropertyChanged(nameof(IsSimilarImage));
+            OnPropertyChanged(nameof(DuplicateBadgeText));
+            OnPropertyChanged(nameof(HasDuplicateBadge));
+        }
+    }
+
+    public bool IsExactDuplicate => DuplicateMembership.IsExactDuplicate;
+    public bool IsSimilarImage => DuplicateMembership.IsSimilar;
+    public bool HasDuplicateBadge => IsExactDuplicate || IsSimilarImage;
+    public string DuplicateBadgeText => IsExactDuplicate
+        ? AppText.ExactCopies(DuplicateMembership.ExactGroupCount)
+        : IsSimilarImage
+            ? AppText.SimilarCopies(DuplicateMembership.SimilarGroupCount)
+            : string.Empty;
 
     public ImageSource? Thumbnail
     {
@@ -81,6 +140,15 @@ internal sealed class ScreenshotItemViewModel : ObservableObject
             }
         }
     }
+
+    public void ApplyUserData(ScreenshotUserData? userData)
+    {
+        IsFavorite = userData?.IsFavorite == true;
+        Tags = userData?.Tags?.ToArray() ?? [];
+    }
+
+    public void ApplyDuplicateMembership(DuplicateMembership? membership)
+        => DuplicateMembership = membership ?? new DuplicateMembership(null, 0, null, 0);
 
     private static string FormatFileSize(long bytes)
     {

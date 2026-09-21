@@ -6,6 +6,7 @@
         xmlns:core="clr-namespace:ScreenshotHub.Core;assembly=ScreenshotHub.Core"
         mc:Ignorable="d"
         Title="{x:Static core:AppText.WindowTitle}"
+        Foreground="{StaticResource TextBrush}"
         Width="1380"
         Height="860"
         MinWidth="1160"
@@ -15,7 +16,29 @@
         Closed="Window_Closed"
         KeyDown="Window_KeyDown">
     <Window.Resources>
+        <Style x:Key="DateRangeCalendar" TargetType="Calendar">
+            <Setter Property="Foreground" Value="#17202C" />
+            <Setter Property="Background" Value="#F4F7FB" />
+        </Style>
+        <Style x:Key="DateRangePicker" TargetType="DatePicker">
+            <Setter Property="Width" Value="155" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Foreground" Value="#17202C" />
+            <Setter Property="Background" Value="#F4F7FB" />
+            <Setter Property="SelectedDateFormat" Value="Short" />
+            <Setter Property="CalendarStyle" Value="{StaticResource DateRangeCalendar}" />
+            <Style.Resources>
+                <Style TargetType="DatePickerTextBox">
+                    <Setter Property="Foreground" Value="#17202C" />
+                    <Setter Property="Background" Value="#F4F7FB" />
+                </Style>
+                <Style TargetType="TextBlock">
+                    <Setter Property="Foreground" Value="#17202C" />
+                </Style>
+            </Style.Resources>
+        </Style>
         <Style x:Key="SidebarListBoxItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="Margin" Value="0,0,0,6" />
@@ -70,7 +93,7 @@
 
         <Style x:Key="GalleryCardStyle" TargetType="Border">
             <Setter Property="Width" Value="238" />
-            <Setter Property="Height" Value="240" />
+            <Setter Property="Height" Value="272" />
             <Setter Property="Margin" Value="7" />
             <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource OutlineBrush}" />
@@ -281,13 +304,19 @@
         <!-- Main content -->
         <Grid Grid.Column="1">
             <Grid.RowDefinitions>
-                <RowDefinition Height="94" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="44" />
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0" BorderBrush="#202A39" BorderThickness="0,0,0,1">
-                <Grid Margin="25,17,24,15">
+                <Grid Margin="25,13,24,12">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="66" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" MinWidth="180" />
                         <ColumnDefinition Width="250" />
@@ -352,7 +381,97 @@
                         <Button Content="{x:Static core:AppText.AddFolder}"
                                 Click="AddFolderButton_Click"
                                 IsEnabled="{Binding CanEditFolders}"
-                                Style="{StaticResource AccentButton}" />
+                                 Style="{StaticResource AccentButton}" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="1"
+                                Grid.ColumnSpan="3"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Bottom"
+                                Visibility="{Binding IsGalleryMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="{x:Static core:AppText.Filter}"
+                                   Margin="0,0,9,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextMutedBrush}"
+                                   FontSize="11" />
+                        <ComboBox Width="164"
+                                  Height="32"
+                                  ItemsSource="{Binding GalleryFilters}"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedItem="{Binding SelectedGalleryFilter, Mode=TwoWay}"
+                                  AutomationProperties.Name="{x:Static core:AppText.Filter}" />
+                        <ComboBox Width="148"
+                                  Height="32"
+                                  Margin="8,0,0,0"
+                                  ItemsSource="{Binding TagFilters}"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedItem="{Binding SelectedTagFilter, Mode=TwoWay}"
+                                  AutomationProperties.Name="{x:Static core:AppText.Tags}" />
+                        <Button Content="{x:Static core:AppText.AnalyzeImages}"
+                                Command="{Binding AnalyzeCommand}"
+                                IsEnabled="{Binding CanAnalyze}"
+                                Margin="12,0,0,0"
+                                Padding="12,6"
+                                ToolTip="{x:Static core:AppText.AnalyzeImagesTooltip}"
+                                Style="{StaticResource QuietButton}" />
+                        <Button Content="{x:Static core:AppText.CancelAnalysis}"
+                                Command="{Binding CancelAnalysisCommand}"
+                                Margin="8,0,0,0"
+                                Padding="12,6"
+                                Foreground="{StaticResource DangerBrush}"
+                                Visibility="{Binding IsAnalyzing, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                Style="{StaticResource QuietButton}" />
+                    </StackPanel>
+
+                    <WrapPanel Grid.Row="2" Grid.ColumnSpan="3" Margin="0,10,0,0"
+                               Visibility="{Binding IsGalleryMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                            <TextBlock Text="{x:Static core:AppText.SavedDate}" VerticalAlignment="Center"
+                                       Margin="0,0,9,0" FontSize="11" Foreground="{StaticResource TextMutedBrush}"
+                                       ToolTip="{x:Static core:AppText.SavedDateHint}" />
+                            <ComboBox x:Name="DatePeriodBox" Width="148" Height="32"
+                                      ItemsSource="{Binding DatePeriods}" DisplayMemberPath="DisplayName"
+                                      SelectedItem="{Binding SelectedDatePeriod, Mode=TwoWay}"
+                                      ToolTip="{x:Static core:AppText.SavedDateHint}"
+                                      AutomationProperties.Name="{x:Static core:AppText.SavedDate}" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,12,0">
+                            <TextBlock Text="{x:Static core:AppText.SortOrder}" VerticalAlignment="Center"
+                                       Margin="0,0,9,0" FontSize="11" Foreground="{StaticResource TextMutedBrush}" />
+                            <ComboBox x:Name="SortOrderBox" Width="148" Height="32"
+                                      ItemsSource="{Binding SortOrders}" DisplayMemberPath="DisplayName"
+                                      SelectedItem="{Binding SelectedSortOrder, Mode=TwoWay}"
+                                      ToolTip="{x:Static core:AppText.SortOrderHint}"
+                                      AutomationProperties.Name="{x:Static core:AppText.SortOrder}" />
+                        </StackPanel>
+                        <Button Content="{x:Static core:AppText.ClearDateFilter}"
+                                Command="{Binding ClearDateFilterCommand}" Padding="12,6"
+                                Style="{StaticResource QuietButton}"
+                                Visibility="{Binding HasDateFilter, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    </WrapPanel>
+
+                    <StackPanel Grid.Row="3" Grid.ColumnSpan="3"
+                                Visibility="{Binding IsGalleryMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel Margin="0,10,0,0"
+                                    Visibility="{Binding IsCustomDatePeriod, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <StackPanel Orientation="Horizontal" ToolTip="{x:Static core:AppText.DateRangeHint}">
+                                <TextBlock Text="{x:Static core:AppText.DateFrom}" VerticalAlignment="Center"
+                                           Margin="0,0,9,0" Foreground="{StaticResource TextMutedBrush}" FontSize="11" />
+                                <DatePicker x:Name="DateFromPicker" Style="{StaticResource DateRangePicker}"
+                                            SelectedDate="{Binding DateFrom, Mode=TwoWay}"
+                                            AutomationProperties.Name="{x:Static core:AppText.DateFrom}" />
+                                <TextBlock Text="{x:Static core:AppText.DateTo}" VerticalAlignment="Center"
+                                           Margin="16,0,9,0" Foreground="{StaticResource TextMutedBrush}" FontSize="11" />
+                                <DatePicker x:Name="DateToPicker" Style="{StaticResource DateRangePicker}"
+                                            SelectedDate="{Binding DateTo, Mode=TwoWay}"
+                                            AutomationProperties.Name="{x:Static core:AppText.DateTo}" />
+                            </StackPanel>
+                            <TextBlock Text="{x:Static core:AppText.DateRangeHint}" FontSize="10.5" Margin="0,6,0,0"
+                                       Foreground="{StaticResource TextMutedBrush}" TextWrapping="Wrap" />
+                            <TextBlock Text="{x:Static core:AppText.DateRangeError}" Margin="0,6,0,0"
+                                       Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap"
+                                       Visibility="{Binding HasInvalidDateRange, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </Border>
@@ -383,8 +502,12 @@
                                         KeyDown="Thumbnail_KeyDown">
                                     <Border.ContextMenu>
                                         <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-                                            <MenuItem Header="{x:Static core:AppText.OpenDefaultApp}" Click="OpenMenuItem_Click" />
+                                            <MenuItem Header="{x:Static core:AppText.OpenViewer}" Click="OpenViewerMenuItem_Click" />
+                                            <MenuItem Header="{x:Static core:AppText.OpenDefaultApp}" Click="OpenDefaultMenuItem_Click" />
                                             <MenuItem Header="{x:Static core:AppText.ShowInExplorer}" Click="ShowInExplorerMenuItem_Click" />
+                                            <Separator />
+                                            <MenuItem Header="{Binding FavoriteAutomationName}" Click="FavoriteMenuItem_Click" />
+                                            <MenuItem Header="{x:Static core:AppText.EditTags}" Click="EditTagsMenuItem_Click" />
                                             <Separator />
                                             <MenuItem Header="{x:Static core:AppText.CopyPath}" Click="CopyPathMenuItem_Click" />
                                         </ContextMenu>
@@ -444,6 +567,23 @@
                                                                TextTrimming="CharacterEllipsis" />
                                                 </Border>
 
+                                                <Button HorizontalAlignment="Right"
+                                                        VerticalAlignment="Top"
+                                                        Width="34"
+                                                        Height="34"
+                                                        Margin="8"
+                                                        Padding="0"
+                                                        Content="{Binding FavoriteGlyph}"
+                                                        ToolTip="{Binding FavoriteAutomationName}"
+                                                        AutomationProperties.Name="{Binding FavoriteAutomationName}"
+                                                        Click="FavoriteButton_Click"
+                                                        Foreground="#FFE6A8"
+                                                        Background="#CC101722"
+                                                        BorderBrush="#40506A"
+                                                        BorderThickness="1"
+                                                        FontSize="17"
+                                                        Cursor="Hand" />
+
                                                 <Border VerticalAlignment="Bottom"
                                                         Height="34"
                                                         Background="#B30A0D14">
@@ -453,6 +593,19 @@
                                                                Foreground="#D6DEEC"
                                                                FontSize="10.5" />
                                                 </Border>
+
+                                                <Border HorizontalAlignment="Right"
+                                                        VerticalAlignment="Bottom"
+                                                        Margin="0,0,8,7"
+                                                        Padding="7,3"
+                                                        CornerRadius="7"
+                                                        Background="#D9263759"
+                                                        Visibility="{Binding HasDuplicateBadge, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                                    <TextBlock Text="{Binding DuplicateBadgeText}"
+                                                               Foreground="{StaticResource AccentStrongBrush}"
+                                                               FontSize="9.5"
+                                                               FontWeight="SemiBold" />
+                                                </Border>
                                             </Grid>
                                         </Border>
 
@@ -460,12 +613,21 @@
                                             <Grid.RowDefinitions>
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
                                             <TextBlock Text="{Binding FileNameWithoutExtension}"
                                                        ToolTip="{Binding FileName}"
                                                        FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis" />
-                                            <Grid Grid.Row="1" Margin="0,7,0,0">
+                                            <TextBlock Grid.Row="1"
+                                                       Text="{Binding TagsText}"
+                                                       ToolTip="{Binding TagsText}"
+                                                       Margin="0,6,0,0"
+                                                       Foreground="{StaticResource AccentStrongBrush}"
+                                                       FontSize="10"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Visibility="{Binding HasTags, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                            <Grid Grid.Row="2" Margin="0,7,0,0">
                                                 <TextBlock Text="{Binding FolderName}"
                                                            MaxWidth="155"
                                                            HorizontalAlignment="Left"
@@ -714,6 +876,9 @@
                                     <DataTrigger Binding="{Binding IsScanning}" Value="True">
                                         <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
                                     </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsAnalyzing}" Value="True">
+                                        <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                    </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Ellipse.Style>
@@ -746,7 +911,7 @@
                          Foreground="{StaticResource AccentBrush}"
                          Background="Transparent"
                          BorderThickness="0"
-                         Visibility="{Binding IsScanning, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                         Visibility="{Binding IsBusy, Converter={StaticResource BooleanToVisibilityConverter}}" />
         </Grid>
     </Grid>
 </Window>

@@ -1,4 +1,5 @@
 using ScreenshotHub.Core;
+using System.Security.Cryptography;
 using System.Text.Json;
 
 var testRoot = Path.Combine(
@@ -10,6 +11,7 @@ try
 {
     Directory.CreateDirectory(testRoot);
     await RunScannerTestsAsync(testRoot);
+    await RunIncrementalScannerTestsAsync(testRoot);
     await RunOverlappingDepthBoundaryTestAsync(testRoot);
     await RunPackagesDiscoveryTestAsync(testRoot);
     await RunReparseRootTestWhenSupportedAsync(testRoot);
@@ -18,6 +20,11 @@ try
     await RunFolderCatalogStoreTestsAsync(testRoot);
     await RunFullCatalogSemanticValidationTestsAsync(testRoot);
     await RunSettingsTestsAsync(testRoot);
+    await RunUserDataStoreTestsAsync(testRoot);
+    await RunAnalysisStoreTestsAsync(testRoot);
+    RunDataLocationTests(testRoot);
+    RunDuplicateGroupingTests(testRoot);
+    RunBrowseQueryTests(testRoot);
     Console.WriteLine("SCREENSHOT_HUB_SELF_TEST_SUCCESS");
     return 0;
 }
@@ -122,6 +129,62 @@ static async Task RunScannerTestsAsync(string testRoot)
     var modpack = result.Screenshots.Single(record =>
         record.FilePath.Equals(modpackShot, StringComparison.OrdinalIgnoreCase));
     Assert(modpack.GameName == "Modpack A", $"Modpack title resolution failed: {modpack.GameName}");
+}
+
+static async Task RunIncrementalScannerTestsAsync(string testRoot)
+{
+    var root = Path.Combine(testRoot, "Incremental Scan", "Screenshots");
+    var firstPath = Path.Combine(root, "first.png");
+    var removedPath = Path.Combine(root, "removed.png");
+    Directory.CreateDirectory(root);
+    await File.WriteAllBytesAsync(firstPath, OnePixelPng());
+    await File.WriteAllBytesAsync(removedPath, OnePixelPng());
+    var firstUtc = new DateTime(2026, 8, 8, 1, 2, 3, DateTimeKind.Utc);
+    var removedUtc = firstUtc.AddMinutes(1);
+    File.SetLastWriteTimeUtc(firstPath, firstUtc);
+    File.SetLastWriteTimeUtc(removedPath, removedUtc);
+    var originalBytes = await File.ReadAllBytesAsync(firstPath);
+    var originalHash = Convert.ToHexString(SHA256.HashData(originalBytes));
+
+    var roots = new[] { new ScanRoot(root, "Incremental fixture", true) };
+    var initial = await ScreenshotScanner.ScanAsync(roots, maxDepth: 4);
+    Assert(initial.Screenshots.Count == 2, "The incremental fixture was not indexed.");
+    Assert(
+        initial.Incremental.Reused == 0 && initial.Incremental.AddedOrUpdated == 2 && initial.Incremental.Removed == 0,
+        "The initial scan reported incorrect incremental counters.");
+
+    var unchanged = await ScreenshotScanner.ScanIncrementalAsync(
+        roots,
+        maxDepth: 4,
+        initial.Screenshots);
+    Assert(
+        unchanged.Incremental.Reused == 2 &&
+        unchanged.Incremental.AddedOrUpdated == 0 &&
+        unchanged.Incremental.Removed == 0,
+        "An unchanged incremental scan did not reuse both catalog records.");
+    var initialFirst = initial.Screenshots.Single(record =>
+        record.FilePath.Equals(firstPath, StringComparison.OrdinalIgnoreCase));
+    var unchangedFirst = unchanged.Screenshots.Single(record =>
+        record.FilePath.Equals(firstPath, StringComparison.OrdinalIgnoreCase));
+    Assert(ReferenceEquals(initialFirst, unchangedFirst), "An unchanged screenshot record was rebuilt instead of reused.");
+    Assert(File.GetLastWriteTimeUtc(firstPath) == firstUtc, "Scanning changed the image timestamp.");
+    Assert(
+        Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(firstPath))) == originalHash,
+        "Scanning changed the image bytes.");
+
+    await File.WriteAllBytesAsync(firstPath, [.. OnePixelPng(), 0]);
+    File.SetLastWriteTimeUtc(firstPath, firstUtc.AddHours(1));
+    File.Delete(removedPath);
+    var changed = await ScreenshotScanner.ScanIncrementalAsync(
+        roots,
+        maxDepth: 4,
+        unchanged.Screenshots);
+    Assert(
+        changed.Screenshots.Count == 1 &&
+        changed.Incremental.Reused == 0 &&
+        changed.Incremental.AddedOrUpdated == 1 &&
+        changed.Incremental.Removed == 1,
+        "Changed and removed images were not reflected in the incremental counters.");
 }
 
 static async Task RunPackagesDiscoveryTestAsync(string testRoot)
@@ -294,14 +357,29 @@ static async Task RunSettingsTestsAsync(string testRoot)
         AutoRefresh = false,
         AutoRefreshMinutes = 10,
         FolderOnlyMode = true,
+        GalleryFilter = "favorites",
+        TagFilter = "夜景",
+        DatePeriod = "custom",
+        DateFrom = new DateTime(2026, 9, 1, 12, 34, 0),
+        DateTo = new DateTime(2026, 9, 21),
+        SortOrder = "oldest",
         MaxDepth = 12,
         CustomRoots = [Path.Combine(testRoot, "First")]
     };
     await store.SaveAsync(first);
     var firstLoaded = await store.LoadAsync();
     Assert(
-        !firstLoaded.AutoRefresh && firstLoaded.FolderOnlyMode && firstLoaded.MaxDepth == 12,
+        !firstLoaded.AutoRefresh &&
+        firstLoaded.FolderOnlyMode &&
+        firstLoaded.MaxDepth == 12 &&
+        firstLoaded.GalleryFilter == "favorites" &&
+        firstLoaded.TagFilter == "夜景",
         "Settings round trip, including folder-only mode, failed.");
+    Assert(firstLoaded.DatePeriod == "custom" && firstLoaded.SortOrder == "oldest" &&
+           firstLoaded.DateFrom == new DateTime(2026, 9, 1) &&
+           firstLoaded.DateFrom.Value.Kind == DateTimeKind.Unspecified &&
+           firstLoaded.DateTo == new DateTime(2026, 9, 21),
+        "Browse settings did not round-trip as local calendar dates.");
 
     var second = new HubSettings
     {
@@ -367,6 +445,31 @@ static async Task RunSettingsTestsAsync(string testRoot)
         !migrated.AutoRefresh &&
         migrated.AutoRefreshMinutes == 30,
         "Legacy automatic rescans were not disabled during migration.");
+
+    var v2Path = Path.Combine(testRoot, "Version 2 AppData", "settings.json");
+    Directory.CreateDirectory(Path.GetDirectoryName(v2Path)!);
+    await File.WriteAllTextAsync(
+        v2Path,
+        "{\"schemaVersion\":2,\"autoRefresh\":true,\"autoRefreshMinutes\":5,\"galleryFilter\":\"similar-images\"}");
+    var v2Migrated = await new SettingsStore(v2Path).LoadAsync();
+    Assert(
+        v2Migrated.SchemaVersion == HubSettings.CurrentSchemaVersion &&
+        v2Migrated.AutoRefresh &&
+        v2Migrated.AutoRefreshMinutes == 5 &&
+        v2Migrated.GalleryFilter == "similar-images",
+        "Version 2 settings lost the user's rescan or gallery-filter choice during migration.");
+    Assert(v2Migrated.DatePeriod == "all-time" && v2Migrated.SortOrder == "newest" &&
+           v2Migrated.DateFrom is null && v2Migrated.DateTo is null,
+        "Older settings unexpectedly hid images using a date filter.");
+
+    var invalidBrowse = HubSettings.CreateDefault();
+    invalidBrowse.DatePeriod = "unknown";
+    invalidBrowse.SortOrder = "unknown";
+    var browseStore = new SettingsStore(Path.Combine(testRoot, "Browse Settings", "settings.json"));
+    await browseStore.SaveAsync(invalidBrowse);
+    var normalizedBrowse = await browseStore.LoadAsync();
+    Assert(normalizedBrowse.DatePeriod == "all-time" && normalizedBrowse.SortOrder == "newest",
+        "Invalid browse settings were not restored to safe defaults.");
 }
 
 static async Task RunCatalogStoreTestsAsync(string testRoot)
@@ -481,6 +584,217 @@ static async Task RunFullCatalogSemanticValidationTestsAsync(string testRoot)
     Assert(
         await new ScreenshotCatalogStore(noBackupPath).LoadAsync() is null,
         "A semantically invalid catalog without a backup was not rejected as null.");
+}
+
+static async Task RunUserDataStoreTestsAsync(string testRoot)
+{
+    var dataDirectory = Path.Combine(testRoot, "User Data Store");
+    var storePath = Path.Combine(dataDirectory, "user-data-v1.json");
+    var imagePath = Path.Combine(testRoot, "User Data Images", "思い出.png");
+    Directory.CreateDirectory(Path.GetDirectoryName(imagePath)!);
+    await File.WriteAllBytesAsync(imagePath, OnePixelPng());
+    var imageUtc = new DateTime(2026, 8, 8, 2, 3, 4, DateTimeKind.Utc);
+    File.SetLastWriteTimeUtc(imagePath, imageUtc);
+    var imageBytes = await File.ReadAllBytesAsync(imagePath);
+
+    var store = new ScreenshotUserDataStore(storePath);
+    var first = ScreenshotUserDataStore.Create(
+    [
+        new ScreenshotUserData
+        {
+            FilePath = imagePath,
+            IsFavorite = true,
+            Tags = [" 夜景 ", "夜景", "\u0001アクション"],
+            UpdatedUtc = new DateTime(2026, 8, 8, 3, 4, 5, DateTimeKind.Utc)
+        }
+    ]);
+    await store.SaveAsync(first);
+    var loaded = await store.LoadAsync();
+    Assert(loaded.Items.Count == 1, "Favorite and tag metadata was not saved.");
+    Assert(loaded.Items[0].IsFavorite, "Favorite metadata changed during the round trip.");
+    Assert(
+        loaded.Items[0].Tags.SequenceEqual(["アクション", "夜景"]),
+        $"Tags were not normalized and de-duplicated: {string.Join(", ", loaded.Items[0].Tags)}");
+    Assert(File.GetLastWriteTimeUtc(imagePath) == imageUtc, "Saving metadata changed the image timestamp.");
+    Assert(
+        (await File.ReadAllBytesAsync(imagePath)).SequenceEqual(imageBytes),
+        "Saving metadata changed the image bytes.");
+
+    await store.SaveAsync(ScreenshotUserDataStore.Create(
+    [
+        new ScreenshotUserData
+        {
+            FilePath = imagePath,
+            IsFavorite = false,
+            Tags = ["second snapshot"],
+            UpdatedUtc = DateTime.UtcNow
+        }
+    ]));
+    await File.WriteAllTextAsync(storePath, "{ invalid json");
+    var recovered = await store.LoadAsync();
+    Assert(
+        recovered.Items.Count == 1 &&
+        recovered.Items[0].IsFavorite &&
+        recovered.Items[0].Tags.Contains("夜景"),
+        "User metadata did not recover its previous known-good backup.");
+
+    var resolved = ScreenshotUserDataStore.ResolvePathForSettings(
+        Path.Combine(testRoot, "Portable Data", "settings.json"));
+    Assert(
+        string.Equals(Path.GetFileName(resolved), "user-data-v1.json", StringComparison.Ordinal),
+        "User metadata was incorrectly split by UI language.");
+}
+
+static async Task RunAnalysisStoreTestsAsync(string testRoot)
+{
+    var storePath = Path.Combine(testRoot, "Analysis Store", "analysis-v1.json");
+    var imagePath = Path.Combine(testRoot, "Analysis Images", "shot.png");
+    var otherPath = Path.Combine(testRoot, "Analysis Images", "other.png");
+    var analyzedUtc = new DateTime(2026, 8, 8, 4, 5, 6, DateTimeKind.Utc);
+    var firstRecord = new ScreenshotAnalysisRecord(
+        imagePath,
+        analyzedUtc,
+        123,
+        new string('a', 64),
+        0x0123456789ABCDEF,
+        1920,
+        1080);
+    var store = new ScreenshotAnalysisStore(storePath);
+    await store.SaveAsync(ScreenshotAnalysisStore.Create([firstRecord], analyzedUtc));
+    var loaded = await store.LoadAsync();
+    Assert(loaded.Items.Count == 1, "The image-analysis cache was not saved.");
+    Assert(loaded.Items[0].Sha256 == new string('A', 64), "SHA-256 text was not normalized.");
+    Assert(loaded.Items[0].DifferenceHash == firstRecord.DifferenceHash, "The difference hash changed.");
+
+    await store.SaveAsync(ScreenshotAnalysisStore.Create(
+    [
+        firstRecord with { DifferenceHash = 42 },
+        new ScreenshotAnalysisRecord(otherPath, analyzedUtc, 456, null, 99, 1280, 720)
+    ], analyzedUtc.AddMinutes(1)));
+    await File.WriteAllTextAsync(storePath, "not json");
+    var recovered = await store.LoadAsync();
+    Assert(
+        recovered.Items.Count == 1 && recovered.Items[0].DifferenceHash == firstRecord.DifferenceHash,
+        "The analysis cache did not recover its previous known-good backup.");
+
+    var rejectedInvalidHash = false;
+    try
+    {
+        _ = ScreenshotAnalysisStore.Create(
+            [firstRecord with { Sha256 = "not-a-sha256" }],
+            analyzedUtc);
+    }
+    catch (InvalidDataException)
+    {
+        rejectedInvalidHash = true;
+    }
+
+    Assert(rejectedInvalidHash, "An invalid SHA-256 value was accepted into the analysis cache.");
+}
+
+static void RunDuplicateGroupingTests(string testRoot)
+{
+    var directory = Path.Combine(testRoot, "Duplicate Grouping");
+    var timestamp = new DateTime(2026, 8, 8, 5, 6, 7, DateTimeKind.Utc);
+    var exactHash = new string('B', 64);
+    var a = new ScreenshotAnalysisRecord(Path.Combine(directory, "a.png"), timestamp, 100, exactHash, 0, 1920, 1080);
+    var b = new ScreenshotAnalysisRecord(Path.Combine(directory, "b.png"), timestamp, 100, exactHash, 1, 1920, 1080);
+    var spreadNearHash = (1UL << 0) | (1UL << 16) | (1UL << 32) | (1UL << 48);
+    var c = new ScreenshotAnalysisRecord(Path.Combine(directory, "c.png"), timestamp, 101, null, spreadNearHash, 1920, 1080);
+    var distant = new ScreenshotAnalysisRecord(Path.Combine(directory, "distant.png"), timestamp, 102, null, ulong.MaxValue, 1920, 1080);
+    var wrongAspect = new ScreenshotAnalysisRecord(Path.Combine(directory, "portrait.png"), timestamp, 103, null, 1, 1080, 1920);
+    var groups = DuplicateGrouper.Build([a, b, c, distant, wrongAspect]);
+
+    Assert(groups[a.FilePath].IsExactDuplicate && groups[a.FilePath].ExactGroupCount == 2,
+        "Exact SHA-256 duplicates were not grouped.");
+    Assert(groups[b.FilePath].ExactGroupId == groups[a.FilePath].ExactGroupId,
+        "Exact duplicates received different group identifiers.");
+    Assert(groups[a.FilePath].IsSimilar && groups[a.FilePath].SimilarGroupCount == 3,
+        "Near difference hashes were not grouped as similar images.");
+    Assert(!groups[distant.FilePath].IsSimilar, "A visually distant hash was grouped as similar.");
+    Assert(!groups[wrongAspect.FilePath].IsSimilar, "A portrait image was grouped with landscape images.");
+    Assert(DuplicateGrouper.HammingDistance(0, ulong.MaxValue) == 64,
+        "Difference-hash Hamming distance is incorrect.");
+}
+
+static void RunDataLocationTests(string testRoot)
+{
+    var applicationDirectory = Path.Combine(testRoot, "Portable Resolution", "app");
+    Directory.CreateDirectory(applicationDirectory);
+    Assert(
+        DataLocationResolver.ResolveSettingsPath(null, applicationDirectory) is null,
+        "A standard build unexpectedly selected the portable data folder.");
+
+    File.WriteAllText(Path.Combine(applicationDirectory, "portable.flag"), string.Empty);
+    var portablePath = DataLocationResolver.ResolveSettingsPath(null, applicationDirectory);
+    Assert(
+        portablePath == Path.Combine(Path.GetFullPath(applicationDirectory), "Data", "settings.json"),
+        "The portable marker did not select the Data folder beside the executable.");
+
+    var explicitPath = Path.Combine(testRoot, "Explicit Data", "settings.json");
+    Assert(
+        DataLocationResolver.ResolveSettingsPath(explicitPath, applicationDirectory) == Path.GetFullPath(explicitPath),
+        "An explicit data directory did not override portable mode.");
+}
+
+static void RunBrowseQueryTests(string testRoot)
+{
+    var today = new DateTime(2026, 9, 21);
+    var zone = TimeZoneInfo.CreateCustomTimeZone("Test JST", TimeSpan.FromHours(9), "Test JST", "Test JST");
+    var library = Path.Combine(testRoot, "Metadata Only");
+    ScreenshotRecord Shot(string name, DateTime utc, long size) => new(
+        Path.Combine(library, name), library, "Test game", utc, size);
+    var start = new DateTime(2026, 9, 14, 15, 0, 0, DateTimeKind.Utc);
+    var before = Shot("b-before.png", start.AddTicks(-1), 10);
+    var first = Shot("c-start.png", start, 30);
+    var last = Shot("a-end.png", start.AddDays(7).AddTicks(-1), 20);
+    var tomorrow = Shot("d-tomorrow.png", start.AddDays(7), 40);
+    ScreenshotRecord[] records = [last, tomorrow, before, first];
+    ScreenshotRecord[] Filter(string period, DateTime? from = null, DateTime? to = null) =>
+        ScreenshotBrowseQuery.FilterByDate(records, period, from, to, today, zone).ToArray();
+
+    Assert(Filter("today").SequenceEqual([last]), "Today did not respect the local date boundary.");
+    Assert(Filter("last-7-days").SequenceEqual([last, first]), "The last seven days were not inclusive calendar days.");
+    Assert(Filter("last-30-days").SequenceEqual([last, before, first]), "A future image leaked into a relative period.");
+    Assert(Filter("custom", today.AddDays(-6), today).SequenceEqual([last, first]),
+        "A custom range excluded its start or end day.");
+    Assert(Filter("custom", today).SequenceEqual([last, tomorrow]), "A start-only range failed.");
+    Assert(Filter("custom", to: today.AddDays(-6)).SequenceEqual([before, first]), "An end-only range failed.");
+    Assert(Filter("custom", today, today.AddDays(-1)).Length == 0, "A reversed range was treated as valid.");
+    Assert(Filter("all-time", today, today).SequenceEqual(records), "Inactive custom dates affected all-time results.");
+    Assert(Filter("custom", DateTime.MinValue, DateTime.MaxValue).Length == records.Length,
+        "A date limit overflowed or excluded a valid record.");
+
+    Assert(ScreenshotBrowseQuery.Sort(records, "newest").SequenceEqual([tomorrow, last, first, before]),
+        "Newest-first sorting failed.");
+    Assert(ScreenshotBrowseQuery.Sort(records, "oldest").SequenceEqual([before, first, last, tomorrow]),
+        "Oldest-first sorting failed.");
+    Assert(ScreenshotBrowseQuery.Sort(records, "name").SequenceEqual([last, before, first, tomorrow]),
+        "Filename sorting failed.");
+    Assert(ScreenshotBrowseQuery.Sort(records, "largest").SequenceEqual([tomorrow, first, last, before]),
+        "Size sorting failed.");
+    Assert(ScreenshotBrowseQuery.Sort(records, "oldest", record =>
+        record == before || record == tomorrow ? "A" : "B").SequenceEqual([before, tomorrow, first, last]),
+        "Changing sort order split duplicate groups apart.");
+    var tieB = first with { FilePath = Path.Combine(library, "z", "same.png") };
+    var tieA = first with { FilePath = Path.Combine(library, "a", "same.png") };
+    Assert(ScreenshotBrowseQuery.Sort([tieB, tieA], "name").SequenceEqual([tieA, tieB]),
+        "Equal sort values were not given a stable path-based order.");
+
+    // The US spring-forward day has 23 hours; inclusive local dates must still work.
+    var pacific = TimeZoneInfo.FindSystemTimeZoneById("Pacific Standard Time");
+    var dstStart = new DateTime(2026, 3, 8, 8, 0, 0, DateTimeKind.Utc);
+    ScreenshotRecord[] dstRecords =
+    [
+        Shot("before.png", dstStart.AddTicks(-1), 1),
+        Shot("first.png", dstStart, 1),
+        Shot("last.png", dstStart.AddHours(23).AddTicks(-1), 1),
+        Shot("after.png", dstStart.AddHours(23), 1)
+    ];
+    Assert(ScreenshotBrowseQuery.FilterByDate(dstRecords, "today", null, null,
+        new DateTime(2026, 3, 8), pacific).SequenceEqual([dstRecords[1], dstRecords[2]]),
+        "Daylight-saving time caused a local-day boundary error.");
+    Assert(!Directory.Exists(library), "Browsing unexpectedly touched a screenshot directory.");
 }
 
 static void Assert(bool condition, string message)

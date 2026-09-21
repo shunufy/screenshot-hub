@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Markup;
 using Microsoft.Win32;
 using ScreenshotHub.Core;
 using ScreenshotHub.Services;
@@ -17,11 +18,16 @@ public partial class MainWindow : Window
     public MainWindow(IReadOnlyList<string>? restrictedScanRoots = null, string? settingsPath = null)
     {
         InitializeComponent();
+        Language = XmlLanguage.GetLanguage(AppText.LanguageCode);
+        DateFromPicker.Language = Language;
+        DateToPicker.Language = Language;
         _viewModel = new MainWindowViewModel(restrictedScanRoots, settingsPath);
         DataContext = _viewModel;
         _viewModel.VisibleItems.CollectionChanged += VisibleItems_CollectionChanged;
         SourceInitialized += (_, _) => ApplyDarkTitleBar();
     }
+
+    internal MainWindowViewModel ViewModel => _viewModel;
 
     private async void Window_Loaded(object sender, RoutedEventArgs e)
     {
@@ -85,11 +91,44 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OpenMenuItem_Click(object sender, RoutedEventArgs e)
+    private void OpenViewerMenuItem_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: ScreenshotItemViewModel item })
         {
             OpenItem(item);
+        }
+    }
+
+    private void OpenDefaultMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ScreenshotItemViewModel item })
+        {
+            OpenItemInDefaultApp(item);
+        }
+    }
+
+    private async void FavoriteButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ScreenshotItemViewModel item })
+        {
+            e.Handled = true;
+            await _viewModel.ToggleFavoriteAsync(item.FilePath);
+        }
+    }
+
+    private async void FavoriteMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ScreenshotItemViewModel item })
+        {
+            await _viewModel.ToggleFavoriteAsync(item.FilePath);
+        }
+    }
+
+    private async void EditTagsMenuItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: ScreenshotItemViewModel item })
+        {
+            await EditTagsAsync(item);
         }
     }
 
@@ -148,6 +187,24 @@ public partial class MainWindow : Window
 
     private void OpenItem(ScreenshotItemViewModel item)
     {
+        var records = _viewModel.GetViewerRecords();
+        if (!records.Any(record => string.Equals(
+                record.FilePath,
+                item.FilePath,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            records = [item.Record];
+        }
+
+        var viewer = new ImageViewerWindow(_viewModel, records, item.FilePath)
+        {
+            Owner = this
+        };
+        viewer.Show();
+    }
+
+    private void OpenItemInDefaultApp(ScreenshotItemViewModel item)
+    {
         try
         {
             if (!ShellService.OpenFile(item.FilePath))
@@ -161,6 +218,18 @@ public partial class MainWindow : Window
         }
     }
 
+    private async Task EditTagsAsync(ScreenshotItemViewModel item)
+    {
+        var editor = new TagEditorWindow(_viewModel.GetUserDataSnapshot(item.FilePath).Tags)
+        {
+            Owner = this
+        };
+        if (editor.ShowDialog() == true)
+        {
+            await _viewModel.UpdateTagsAsync(item.FilePath, editor.Tags);
+        }
+    }
+
     private void Window_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.F5 && _viewModel.ScanCommand.CanExecute(null))
@@ -171,6 +240,11 @@ public partial class MainWindow : Window
         else if (e.Key == Key.Escape && _viewModel.CancelScanCommand.CanExecute(null))
         {
             _viewModel.CancelScanCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Escape && _viewModel.CancelAnalysisCommand.CanExecute(null))
+        {
+            _viewModel.CancelAnalysisCommand.Execute(null);
             e.Handled = true;
         }
         else if (e.Key == Key.L && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))

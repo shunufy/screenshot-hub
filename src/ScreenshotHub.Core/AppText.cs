@@ -26,9 +26,9 @@ public static class AppText
     public static string Interval => English ? "Interval" : "間隔";
     public static string Minutes => English ? "min" : "分";
     public static string SearchTooltip => English
-        ? "Search by file name, game name, or folder path"
-        : "ファイル名・ゲーム名・フォルダーパスから検索";
-    public static string SearchPrompt => English ? "Search games and file names" : "ゲーム名・ファイル名で検索";
+        ? "Search by file name, game name, folder path, or tag"
+        : "ファイル名・ゲーム名・フォルダーパス・タグから検索";
+    public static string SearchPrompt => English ? "Search games, files, and tags" : "ゲーム名・ファイル名・タグで検索";
     public static string SearchFoldersPrompt => English ? "Search folders" : "フォルダーを検索";
     public static string SearchFoldersTooltip => English
         ? "Search by game name or folder path"
@@ -45,6 +45,65 @@ public static class AppText
     public static string OpenDefaultApp => English ? "Open in default app" : "既定のアプリで開く";
     public static string ShowInExplorer => English ? "Show in File Explorer" : "エクスプローラーで表示";
     public static string CopyPath => English ? "Copy path" : "パスをコピー";
+    public static string OpenViewer => English ? "Open viewer" : "ビューアーで開く";
+    public static string Filter => English ? "Filter" : "絞り込み";
+    public static string SavedDate => English ? "Saved date" : "保存日";
+    public static string SavedDateHint => English
+        ? "Uses the file's last-modified date in your local time zone, which may differ from the capture date."
+        : "ファイルの更新日（PCの現地時間）で絞り込みます。撮影日時と異なる場合があります。";
+    public static string DateAllTime => English ? "Any time" : "すべての期間";
+    public static string DateToday => English ? "Today" : "今日";
+    public static string DateLast7Days => English ? "Last 7 days" : "過去7日間";
+    public static string DateLast30Days => English ? "Last 30 days" : "過去30日間";
+    public static string DateCustom => English ? "Custom range" : "期間を指定";
+    public static string DateFrom => English ? "From" : "開始日";
+    public static string DateTo => English ? "To" : "終了日";
+    public static string DateRangeHint => English
+        ? "Both dates are included. Leave either date blank for no limit."
+        : "開始日・終了日を含みます。空欄にするとその側の制限を外せます。";
+    public static string DateRangeError => English
+        ? "Choose an end date on or after the start date."
+        : "終了日は開始日以降の日付を選んでください。";
+    public static string ClearDateFilter => English ? "Clear dates" : "期間を解除";
+    public static string SortOrder => English ? "Sort" : "並び順";
+    public static string SortNewest => English ? "Newest first" : "新しい順";
+    public static string SortOldest => English ? "Oldest first" : "古い順";
+    public static string SortName => English ? "File name" : "ファイル名順";
+    public static string SortLargest => English ? "Largest first" : "容量が大きい順";
+    public static string SortOrderHint => English
+        ? "Uses the saved list. In duplicate views, sorts within each group."
+        : "保存済みの一覧を並べ替えます。重複・類似の表示ではグループ内を並べ替えます。";
+    public static string FilterAll => English ? "All images" : "すべての画像";
+    public static string FilterFavorites => English ? "Favorites" : "お気に入り";
+    public static string FilterTagged => English ? "Tagged" : "タグあり";
+    public static string FilterUntagged => English ? "Untagged" : "タグなし";
+    public static string FilterExactDuplicates => English ? "Exact duplicates" : "完全な重複";
+    public static string FilterSimilarImages => English ? "Similar images" : "類似画像";
+    public static string AllTags => English ? "All tags" : "すべてのタグ";
+    public static string AddFavorite => English ? "Add to favorites" : "お気に入りに追加";
+    public static string RemoveFavorite => English ? "Remove from favorites" : "お気に入りから外す";
+    public static string EditTags => English ? "Edit tags" : "タグを編集";
+    public static string Tags => English ? "Tags" : "タグ";
+    public static string TagsHint => English
+        ? "Separate tags with commas. Tags are stored only in Screenshot Hub."
+        : "カンマ区切りで入力します。タグはScreenshot Hub内だけに保存されます。";
+    public static string Save => English ? "Save" : "保存";
+    public static string AnalyzeImages => English ? "Analyze duplicates" : "重複・類似を解析";
+    public static string AnalyzeImagesTooltip => English
+        ? "Find exact copies and visually similar images. Runs only when selected and never modifies image files."
+        : "完全な重複と見た目が似た画像を探します。選択時だけ実行し、画像ファイルは変更しません。";
+    public static string CancelAnalysis => English ? "Cancel analysis" : "解析をキャンセル";
+    public static string AnalysisPreparing => English ? "Preparing image analysis…" : "画像解析を準備しています…";
+    public static string AnalysisCancelled => English ? "Image analysis cancelled" : "画像解析をキャンセルしました";
+    public static string AnalysisFailed => English ? "Could not complete image analysis" : "画像解析を完了できませんでした";
+    public static string AnalysisNotRun => English ? "Analysis has not been run" : "解析はまだ実行されていません";
+    public static string ViewerTitle => English ? "Screenshot viewer" : "スクリーンショットビューアー";
+    public static string PreviousImage => English ? "Previous image" : "前の画像";
+    public static string NextImage => English ? "Next image" : "次の画像";
+    public static string ZoomIn => English ? "Zoom in" : "拡大";
+    public static string ZoomOut => English ? "Zoom out" : "縮小";
+    public static string FitToWindow => English ? "Fit to window" : "ウィンドウに合わせる";
+    public static string ActualSize => English ? "Actual size" : "原寸大";
     public static string CreatingPreview => English ? "Creating preview" : "プレビューを作成中";
     public static string PreviewUnavailable => English ? "Preview unavailable" : "プレビューを表示できません";
     public static string SearchingScreenshots => English ? "Searching for screenshots" : "スクリーンショットを探しています";
@@ -75,8 +134,8 @@ public static class AppText
         ? "Use Add folder to choose a save location, or run another scan."
         : "「フォルダーを追加」で保存先を指定するか、再スキャンしてください。";
     public static string EmptyFilteredHint => English
-        ? "Try changing the search text or the collection on the left."
-        : "検索語や左側のコレクションを変更してみてください。";
+        ? "Try changing the search, dates, filters, or collection."
+        : "検索語・保存日・絞り込み・コレクションを変更してみてください。";
     public static string EmptyFoldersNotFound => English ? "No screenshot folders found" : "スクリーンショットフォルダーがありません";
     public static string EmptyFolderSearch => English ? "No folders match your search" : "検索に一致するフォルダーがありません";
     public static string EmptyFoldersHint => English
@@ -137,7 +196,7 @@ public static class AppText
     public static string ScreenshotFallback => English ? "Screenshots" : "スクリーンショット";
 
     public static string Latest(DateTime local) => English ? $"Latest {local:M/d  HH:mm}" : $"最新 {local:M/d  HH:mm}";
-    public static string CollectionSummary(int count) => English ? $"{count:N0} {ImageWord(count)} · Newest first" : $"{count:N0} 枚 · 新しい順";
+    public static string CollectionSummary(int count, string sortName) => $"{ImageCount(count)} · {sortName}";
     public static string FolderSummary(int count) => English ? $"{count:N0} {FolderWord(count)} · No thumbnails" : $"{count:N0} フォルダー · サムネイルなし";
     public static string ImageCount(int count) => English ? $"{count:N0} {ImageWord(count)}" : $"{count:N0} 枚";
     public static string PageRange(int start, int end, int total) => English
@@ -149,6 +208,26 @@ public static class AppText
         : $"{directories:N0} フォルダー · {screenshots:N0} 枚";
     public static string LastScanned(DateTime local) => English ? $"Last scan {local:M/d HH:mm}" : $"最終スキャン {local:M/d HH:mm}";
     public static string ScreenshotsFound(int count) => English ? $"{count:N0} {(count == 1 ? "screenshot" : "screenshots")}" : $"{count:N0} 枚のスクリーンショット";
+    public static string ExactCopies(int count) => English
+        ? $"{count:N0} exact {(count == 1 ? "copy" : "copies")}"
+        : $"完全一致 {count:N0} 枚";
+    public static string SimilarCopies(int count) => English
+        ? $"{count:N0} similar {(count == 1 ? "image" : "images")}"
+        : $"類似 {count:N0} 枚";
+    public static string AnalysisProgress(int completed, int total) => English
+        ? $"Analyzing {completed:N0} / {total:N0}"
+        : $"解析中 {completed:N0} / {total:N0}";
+    public static string AnalysisComplete(int exactGroups, int similarGroups) => English
+        ? $"Analysis complete · {exactGroups:N0} exact groups · {similarGroups:N0} similar groups"
+        : $"解析完了 · 完全一致 {exactGroups:N0} 組 · 類似 {similarGroups:N0} 組";
+    public static string IncrementalScanCompleted(
+        int directories,
+        int reused,
+        int addedOrUpdated,
+        int removed,
+        string duration) => English
+        ? $"Checked {directories:N0} {FolderWord(directories)} in {duration} · reused {reused:N0} · new/changed {addedOrUpdated:N0} · removed {removed:N0}"
+        : $"{directories:N0} フォルダーを {duration} で確認 · 再利用 {reused:N0} · 新規/更新 {addedOrUpdated:N0} · 削除済み {removed:N0}";
     public static string SavedCatalogLoaded(int count) => English
         ? $"{count:N0} saved {(count == 1 ? "screenshot" : "screenshots")}"
         : $"保存済みのスクリーンショット {count:N0} 枚";

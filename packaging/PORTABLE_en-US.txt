@@ -1,0 +1,9 @@
+About the portable edition
+
+The portable.flag file makes Screenshot Hub store settings, catalogs, favorites,
+tags, and the analysis cache in the Data folder beside ScreenshotHub.exe.
+
+- Extract the complete ZIP to a writable folder before starting the app.
+- Move the whole folder together if you relocate the app.
+- Image files are not copied into Data and are never moved, renamed, edited, or deleted.
+- Deleting portable.flag switches the app back to the standard %LOCALAPPDATA% location.

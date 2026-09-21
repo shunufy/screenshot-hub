@@ -33,11 +33,20 @@ public static partial class ScreenshotScanner
         int maxDepth,
         IProgress<ScanProgress>? progress = null,
         CancellationToken cancellationToken = default)
+        => ScanIncrementalAsync(roots, maxDepth, [], progress, cancellationToken);
+
+    public static Task<ScanResult> ScanIncrementalAsync(
+        IReadOnlyCollection<ScanRoot> roots,
+        int maxDepth,
+        IReadOnlyCollection<ScreenshotRecord> previousScreenshots,
+        IProgress<ScanProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(roots);
+        ArgumentNullException.ThrowIfNull(previousScreenshots);
         var safeDepth = Math.Clamp(maxDepth, 1, 64);
         return Task.Run(
-            () => ScanCore(roots, safeDepth, progress, cancellationToken),
+            () => ScanCore(roots, safeDepth, previousScreenshots, progress, cancellationToken),
             cancellationToken);
     }
 
@@ -47,6 +56,7 @@ public static partial class ScreenshotScanner
     private static ScanResult ScanCore(
         IReadOnlyCollection<ScanRoot> requestedRoots,
         int maxDepth,
+        IReadOnlyCollection<ScreenshotRecord> previousScreenshots,
         IProgress<ScanProgress>? progress,
         CancellationToken cancellationToken)
     {
@@ -55,6 +65,14 @@ public static partial class ScreenshotScanner
         var scannedRoots = NormalizeRoots(requestedRoots, warnings);
         var screenshots = new Dictionary<string, ScreenshotRecord>(StringComparer.OrdinalIgnoreCase);
         var gameNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var previousByPath = previousScreenshots
+            .Select(record => (Path: PathUtility.Normalize(record.FilePath), Record: record))
+            .Where(entry => entry.Path is not null)
+            .GroupBy(entry => entry.Path!, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.First().Record, StringComparer.OrdinalIgnoreCase);
+        var matchedPreviousPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var reusedRecords = 0;
+        var addedOrUpdatedRecords = 0;
         var directoriesVisited = 0;
 
         foreach (var root in scannedRoots)
@@ -128,6 +146,10 @@ public static partial class ScreenshotScanner
                         root.GameNameHint,
                         screenshots,
                         gameNames,
+                        previousByPath,
+                        matchedPreviousPaths,
+                        ref reusedRecords,
+                        ref addedOrUpdatedRecords,
                         warnings,
                         cancellationToken);
                 }
@@ -175,7 +197,13 @@ public static partial class ScreenshotScanner
             scannedRoots,
             directoriesVisited,
             stopwatch.Elapsed,
-            warnings);
+            warnings)
+        {
+            Incremental = new IncrementalScanSummary(
+                reusedRecords,
+                addedOrUpdatedRecords,
+                Math.Max(0, previousByPath.Count - matchedPreviousPaths.Count))
+        };
     }
 
     private static IReadOnlyList<ScanRoot> NormalizeRoots(
@@ -246,6 +274,10 @@ public static partial class ScreenshotScanner
         string? gameNameHint,
         Dictionary<string, ScreenshotRecord> screenshots,
         Dictionary<string, string> gameNames,
+        IReadOnlyDictionary<string, ScreenshotRecord> previousByPath,
+        HashSet<string> matchedPreviousPaths,
+        ref int reusedRecords,
+        ref int addedOrUpdatedRecords,
         List<string> warnings,
         CancellationToken cancellationToken)
     {
@@ -278,6 +310,21 @@ public static partial class ScreenshotScanner
                     continue;
                 }
 
+                if (previousByPath.TryGetValue(normalizedFile, out var previous))
+                {
+                    matchedPreviousPaths.Add(normalizedFile);
+                    if (previous.FileSize == info.Length &&
+                        previous.LastWriteTimeUtc == info.LastWriteTimeUtc &&
+                        string.Equals(previous.LibraryFolder, normalizedAnchor, StringComparison.OrdinalIgnoreCase) &&
+                        (string.IsNullOrWhiteSpace(gameNameHint) ||
+                         string.Equals(previous.GameName, gameNameHint.Trim(), StringComparison.CurrentCulture)))
+                    {
+                        screenshots[normalizedFile] = previous;
+                        reusedRecords++;
+                        continue;
+                    }
+                }
+
                 if (!gameNames.TryGetValue(normalizedAnchor, out var gameName))
                 {
                     gameName = GameNameResolver.Resolve(normalizedAnchor, gameNameHint);
@@ -290,6 +337,7 @@ public static partial class ScreenshotScanner
                     gameName,
                     info.LastWriteTimeUtc,
                     info.Length);
+                addedOrUpdatedRecords++;
             }
             catch (Exception exception) when (IsRecoverableFileSystemError(exception))
             {

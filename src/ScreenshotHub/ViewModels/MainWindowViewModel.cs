@@ -15,7 +15,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly SettingsStore _settingsStore;
     private readonly ScreenshotCatalogStore _catalogStore;
     private readonly ScreenshotFolderCatalogStore _folderCatalogStore;
+    private readonly ScreenshotUserDataStore _userDataStore;
+    private readonly ScreenshotAnalysisStore _analysisStore;
     private readonly ThumbnailService _thumbnailService = new();
+    private readonly ImageAnalysisService _imageAnalysisService = new();
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _searchTimer;
     private readonly List<string> _sessionRoots;
@@ -25,12 +28,21 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     private readonly RelayCommand _previousPageCommand;
     private readonly RelayCommand _nextPageCommand;
     private readonly AsyncRelayCommand _removeRootCommand;
+    private readonly AsyncRelayCommand _analyzeCommand;
+    private readonly RelayCommand _cancelAnalysisCommand;
     private readonly List<ScreenshotRecord> _records = new();
     private readonly List<ScreenshotRecord> _filteredRecords = new();
+    private readonly Dictionary<string, ScreenshotUserData> _userData =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ScreenshotAnalysisRecord> _analyses =
+        new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, DuplicateMembership> _duplicateMemberships =
+        new Dictionary<string, DuplicateMembership>(StringComparer.OrdinalIgnoreCase);
 
     private HubSettings _settings = HubSettings.CreateDefault();
     private CancellationTokenSource? _scanCancellation;
     private CancellationTokenSource? _thumbnailCancellation;
+    private CancellationTokenSource? _analysisCancellation;
     private FolderViewModel? _selectedFolder;
     private string _searchText = string.Empty;
     private string _statusText = AppText.Preparing;
@@ -51,6 +63,13 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     private DateTime _catalogScanUtc;
     private DateTime? _folderCatalogScanUtc;
     private int _pageIndex;
+    private bool _isAnalyzing;
+    private GalleryFilterOption _selectedGalleryFilter;
+    private TagFilterOption _selectedTagFilter;
+    private BrowseOption _selectedDatePeriod;
+    private BrowseOption _selectedSortOrder;
+    private DateTime? _dateFrom;
+    private DateTime? _dateTo;
 
     public MainWindowViewModel(
         IReadOnlyList<string>? restrictedScanRoots = null,
@@ -61,6 +80,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             ScreenshotCatalogStore.ResolvePathForSettings(settingsPath));
         _folderCatalogStore = new ScreenshotFolderCatalogStore(
             ScreenshotFolderCatalogStore.ResolvePathForSettings(settingsPath));
+        _userDataStore = new ScreenshotUserDataStore(
+            ScreenshotUserDataStore.ResolvePathForSettings(settingsPath));
+        _analysisStore = new ScreenshotAnalysisStore(
+            ScreenshotAnalysisStore.ResolvePathForSettings(settingsPath));
         _restrictToSessionRoots = restrictedScanRoots is { Count: > 0 };
         _sessionRoots = (restrictedScanRoots ?? Array.Empty<string>())
             .Select(NormalizePath)
@@ -71,7 +94,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
 
         _scanCommand = new AsyncRelayCommand(
             _ => ScanAsync(),
-            _ => !IsScanning && !_isRestoringCatalog);
+            _ => !IsScanning && !IsAnalyzing && !_isRestoringCatalog);
         _cancelScanCommand = new RelayCommand(_ => CancelScan(), _ => IsScanning);
         _previousPageCommand = new RelayCommand(_ => SetPage(PageIndex - 1), _ => PageIndex > 0);
         _nextPageCommand = new RelayCommand(_ => SetPage(PageIndex + 1), _ => PageIndex + 1 < PageCount);
@@ -81,7 +104,21 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
                 : Task.CompletedTask,
             parameter => parameter is FolderViewModel { CanRemove: true } &&
                          !IsScanning &&
+                         !IsAnalyzing &&
                          !_isRestoringCatalog);
+        GalleryFilters = GalleryFilterOption.CreateAll();
+        _selectedGalleryFilter = GalleryFilters[0];
+        _selectedTagFilter = new TagFilterOption(null, AppText.AllTags);
+        TagFilters.Add(_selectedTagFilter);
+        _selectedDatePeriod = DatePeriods[0];
+        _selectedSortOrder = SortOrders[0];
+        ClearDateFilterCommand = new RelayCommand(_ => ClearDateFilter());
+        _analyzeCommand = new AsyncRelayCommand(
+            _ => AnalyzeDuplicatesAsync(),
+            _ => CanAnalyze);
+        _cancelAnalysisCommand = new RelayCommand(
+            _ => CancelAnalysis(),
+            _ => IsAnalyzing);
 
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background);
         _refreshTimer.Tick += RefreshTimerOnTick;
@@ -100,6 +137,11 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     }
 
     public ObservableCollection<ScreenshotItemViewModel> VisibleItems { get; } = new();
+    public ObservableCollection<TagFilterOption> TagFilters { get; } = new();
+    public IReadOnlyList<GalleryFilterOption> GalleryFilters { get; }
+    public IReadOnlyList<BrowseOption> DatePeriods { get; } = BrowseOption.DatePeriods();
+    public IReadOnlyList<BrowseOption> SortOrders { get; } = BrowseOption.SortOrders();
+    public ICommand ClearDateFilterCommand { get; }
     public IReadOnlyList<int> RefreshIntervals { get; } = [1, 5, 10, 30, 60];
 
     public ICommand ScanCommand => _scanCommand;
@@ -107,6 +149,8 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
     public ICommand PreviousPageCommand => _previousPageCommand;
     public ICommand NextPageCommand => _nextPageCommand;
     public ICommand RemoveRootCommand => _removeRootCommand;
+    public ICommand AnalyzeCommand => _analyzeCommand;
+    public ICommand CancelAnalysisCommand => _cancelAnalysisCommand;
 
     public FolderViewModel? SelectedFolder
     {
@@ -136,6 +180,116 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
                 _searchTimer.Start();
             }
         }
+    }
+
+    public GalleryFilterOption SelectedGalleryFilter
+    {
+        get => _selectedGalleryFilter;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedGalleryFilter, value))
+            {
+                return;
+            }
+
+            if (!_isApplyingSettings)
+            {
+                _settings.GalleryFilter = ToSettingsKey(value.Kind);
+                _ = SaveSettingsQuietlyAsync();
+            }
+
+            ApplyFilter(resetPage: true);
+        }
+    }
+
+    public TagFilterOption SelectedTagFilter
+    {
+        get => _selectedTagFilter;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedTagFilter, value))
+            {
+                return;
+            }
+
+            if (!_isApplyingSettings)
+            {
+                _settings.TagFilter = value.Tag;
+                _ = SaveSettingsQuietlyAsync();
+            }
+
+            ApplyFilter(resetPage: true);
+        }
+    }
+
+    public BrowseOption SelectedDatePeriod
+    {
+        get => _selectedDatePeriod;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedDatePeriod, value)) return;
+            OnPropertyChanged(nameof(IsCustomDatePeriod));
+            OnPropertyChanged(nameof(HasDateFilter));
+            BrowseOptionsChanged();
+        }
+    }
+
+    public BrowseOption SelectedSortOrder
+    {
+        get => _selectedSortOrder;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedSortOrder, value)) return;
+            BrowseOptionsChanged();
+        }
+    }
+
+    public DateTime? DateFrom
+    {
+        get => _dateFrom;
+        set
+        {
+            if (SetProperty(ref _dateFrom, value?.Date)) BrowseOptionsChanged();
+        }
+    }
+
+    public DateTime? DateTo
+    {
+        get => _dateTo;
+        set
+        {
+            if (SetProperty(ref _dateTo, value?.Date)) BrowseOptionsChanged();
+        }
+    }
+
+    public bool IsCustomDatePeriod => SelectedDatePeriod.Key == "custom";
+    public bool HasDateFilter => SelectedDatePeriod.Key != "all-time";
+    public bool HasInvalidDateRange => IsCustomDatePeriod && DateFrom > DateTo;
+
+    private void BrowseOptionsChanged()
+    {
+        OnPropertyChanged(nameof(HasInvalidDateRange));
+        if (_isApplyingSettings) return;
+
+        _settings.DatePeriod = SelectedDatePeriod.Key;
+        _settings.SortOrder = SelectedSortOrder.Key;
+        _settings.DateFrom = DateFrom;
+        _settings.DateTo = DateTo;
+        _ = SaveSettingsQuietlyAsync();
+        ApplyFilter(resetPage: true);
+    }
+
+    private void ClearDateFilter()
+    {
+        _dateFrom = null;
+        _dateTo = null;
+        _selectedDatePeriod = DatePeriods[0];
+        OnPropertyChanged(nameof(DateFrom));
+        OnPropertyChanged(nameof(DateTo));
+        OnPropertyChanged(nameof(SelectedDatePeriod));
+        OnPropertyChanged(nameof(IsCustomDatePeriod));
+        OnPropertyChanged(nameof(HasDateFilter));
+        BrowseOptionsChanged();
     }
 
     public string StatusText
@@ -170,11 +324,34 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(IsEmpty));
             OnPropertyChanged(nameof(IsFolderOnlyEmpty));
             OnPropertyChanged(nameof(CanEditFolders));
+            OnPropertyChanged(nameof(CanAnalyze));
+            OnPropertyChanged(nameof(IsBusy));
             OnPropertyChanged(nameof(LoadingTitle));
             OnPropertyChanged(nameof(LoadingDetail));
             _scanCommand.RaiseCanExecuteChanged();
             _cancelScanCommand.RaiseCanExecuteChanged();
             _removeRootCommand.RaiseCanExecuteChanged();
+            _analyzeCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool IsAnalyzing
+    {
+        get => _isAnalyzing;
+        private set
+        {
+            if (!SetProperty(ref _isAnalyzing, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(CanAnalyze));
+            OnPropertyChanged(nameof(CanEditFolders));
+            OnPropertyChanged(nameof(IsBusy));
+            _scanCommand.RaiseCanExecuteChanged();
+            _removeRootCommand.RaiseCanExecuteChanged();
+            _analyzeCommand.RaiseCanExecuteChanged();
+            _cancelAnalysisCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -268,7 +445,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     public int PageCount => Math.Max(1, (int)Math.Ceiling(_filteredRecords.Count / (double)PageSize));
     public bool IsLoading => (IsScanning && _records.Count == 0) || _isRestoringCatalog;
-    public bool CanEditFolders => !IsScanning && !_isRestoringCatalog;
+    public bool CanEditFolders => !IsScanning && !IsAnalyzing && !_isRestoringCatalog;
+    public bool CanAnalyze => _imageCatalogLoaded && _records.Count > 0 &&
+                              !IsScanning && !IsAnalyzing && !_isRestoringCatalog;
+    public bool IsBusy => IsScanning || IsAnalyzing || _isRestoringCatalog;
     public bool HasVisibleItems => VisibleItems.Count > 0;
     public bool IsEmpty => IsGalleryMode && !IsScanning && !IsLoading && VisibleItems.Count == 0;
     public bool IsFolderOnlyEmpty => IsFolderOnlyMode && !IsScanning && !IsLoading && VisibleFolders.Count == 0;
@@ -288,7 +468,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         ? AppText.FolderSummary(VisibleFolders.Count)
         : _filteredRecords.Count == 0
             ? AppText.NoScreenshotsYet
-            : AppText.CollectionSummary(_filteredRecords.Count);
+            : AppText.CollectionSummary(_filteredRecords.Count, SelectedSortOrder.DisplayName);
 
     public string SearchPrompt => FolderOnlyMode ? AppText.SearchFoldersPrompt : AppText.SearchPrompt;
 
@@ -316,7 +496,9 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         : _records.Count switch
         {
             0 => AppText.EmptyNotFound,
-            _ when !string.IsNullOrWhiteSpace(SearchText) => AppText.EmptySearch,
+            _ when !string.IsNullOrWhiteSpace(SearchText) || HasDateFilter ||
+                   SelectedGalleryFilter.Kind != GalleryFilterKind.All ||
+                   SelectedTagFilter.Tag is not null => AppText.EmptySearch,
             _ => AppText.EmptyCollection
         };
 
@@ -354,10 +536,21 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
             StatusDetail = exception.Message;
         }
 
+        await LoadAuxiliaryDataAsync();
+
         _isApplyingSettings = true;
         FolderOnlyMode = _settings.FolderOnlyMode;
         AutoRefresh = _settings.AutoRefresh;
         AutoRefreshMinutes = _settings.AutoRefreshMinutes;
+        SelectedGalleryFilter = GalleryFilters.First(option =>
+            option.Kind == FromSettingsKey(_settings.GalleryFilter));
+        SelectedTagFilter = TagFilters.FirstOrDefault(option =>
+            string.Equals(option.Tag, _settings.TagFilter, StringComparison.CurrentCultureIgnoreCase)) ??
+            TagFilters[0];
+        SelectedDatePeriod = DatePeriods.First(option => option.Key == _settings.DatePeriod);
+        SelectedSortOrder = SortOrders.First(option => option.Key == _settings.SortOrder);
+        DateFrom = _settings.DateFrom;
+        DateTo = _settings.DateTo;
         _isApplyingSettings = false;
         if (_restrictToSessionRoots)
         {
@@ -422,7 +615,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     public async Task AddCustomRootAsync(string folderPath)
     {
-        if (IsScanning || _isRestoringCatalog)
+        if (IsScanning || IsAnalyzing || _isRestoringCatalog)
         {
             StatusText = AppText.CannotAddWhileScanning;
             StatusDetail = AppText.CannotAddWhileScanningDetail;
@@ -464,6 +657,194 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     public void CancelScan() => _scanCancellation?.Cancel();
 
+    public async Task ToggleFavoriteAsync(string filePath)
+    {
+        var normalized = NormalizePath(filePath);
+        if (normalized is null)
+        {
+            return;
+        }
+
+        _userData.TryGetValue(normalized, out var current);
+        var updated = new ScreenshotUserData
+        {
+            FilePath = normalized,
+            IsFavorite = current?.IsFavorite != true,
+            Tags = current?.Tags?.ToList() ?? [],
+            UpdatedUtc = DateTime.UtcNow
+        };
+        SetUserData(updated);
+        await SaveUserDataQuietlyAsync();
+        RebuildTagFilters();
+        ApplyFilter(resetPage: false);
+    }
+
+    public async Task UpdateTagsAsync(string filePath, IEnumerable<string> tags)
+    {
+        var normalized = NormalizePath(filePath);
+        if (normalized is null)
+        {
+            return;
+        }
+
+        _userData.TryGetValue(normalized, out var current);
+        var normalizedTags = tags
+            .Select(NormalizeTag)
+            .Where(tag => tag.Length > 0)
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .Take(32)
+            .OrderBy(tag => tag, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+        SetUserData(new ScreenshotUserData
+        {
+            FilePath = normalized,
+            IsFavorite = current?.IsFavorite == true,
+            Tags = normalizedTags,
+            UpdatedUtc = DateTime.UtcNow
+        });
+        await SaveUserDataQuietlyAsync();
+        RebuildTagFilters();
+        ApplyFilter(resetPage: false);
+    }
+
+    public IReadOnlyList<ScreenshotRecord> GetViewerRecords()
+        => _filteredRecords.ToArray();
+
+    public ScreenshotUserData GetUserDataSnapshot(string filePath)
+    {
+        var normalized = NormalizePath(filePath);
+        if (normalized is not null && _userData.TryGetValue(normalized, out var item))
+        {
+            return new ScreenshotUserData
+            {
+                FilePath = item.FilePath,
+                IsFavorite = item.IsFavorite,
+                Tags = item.Tags.ToList(),
+                UpdatedUtc = item.UpdatedUtc
+            };
+        }
+
+        return new ScreenshotUserData { FilePath = normalized ?? filePath };
+    }
+
+    public DuplicateMembership GetDuplicateMembership(string filePath)
+        => _duplicateMemberships.TryGetValue(filePath, out var membership)
+            ? membership
+            : new DuplicateMembership(null, 0, null, 0);
+
+    private async Task LoadAuxiliaryDataAsync()
+    {
+        try
+        {
+            var catalog = await _userDataStore.LoadAsync();
+            _userData.Clear();
+            foreach (var item in catalog.Items)
+            {
+                _userData[item.FilePath] = item;
+            }
+        }
+        catch (Exception exception)
+        {
+            StatusText = AppText.SettingsLoadFailed;
+            StatusDetail = exception.Message;
+        }
+
+        try
+        {
+            var catalog = await _analysisStore.LoadAsync();
+            _analyses.Clear();
+            foreach (var item in catalog.Items)
+            {
+                _analyses[item.FilePath] = item;
+            }
+        }
+        catch (Exception exception)
+        {
+            StatusText = AppText.AnalysisFailed;
+            StatusDetail = exception.Message;
+        }
+
+        RebuildTagFilters(_settings.TagFilter);
+    }
+
+    private async Task AnalyzeDuplicatesAsync()
+    {
+        if (!CanAnalyze)
+        {
+            return;
+        }
+
+        _refreshTimer.Stop();
+        _analysisCancellation?.Cancel();
+        _analysisCancellation?.Dispose();
+        _analysisCancellation = new CancellationTokenSource();
+        var cancellationToken = _analysisCancellation.Token;
+        IsAnalyzing = true;
+        StatusText = AppText.AnalysisPreparing;
+        StatusDetail = AppText.AnalyzeImagesTooltip;
+
+        var progress = new Progress<ImageAnalysisProgress>(value =>
+        {
+            if (value.Completed == 1 || value.Completed == value.Total || value.Completed % 10 == 0)
+            {
+                StatusText = AppText.AnalysisProgress(value.Completed, value.Total);
+                StatusDetail = ShortenPath(value.CurrentPath);
+            }
+        });
+
+        try
+        {
+            var results = await _imageAnalysisService.AnalyzeAsync(
+                _records.ToArray(),
+                _analyses.Values.ToArray(),
+                progress,
+                cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _analyses.Clear();
+            foreach (var item in results)
+            {
+                _analyses[item.FilePath] = item;
+            }
+
+            var completedUtc = DateTime.UtcNow;
+            await _analysisStore.SaveAsync(
+                ScreenshotAnalysisStore.Create(results, completedUtc),
+                cancellationToken);
+            RebuildDuplicateMemberships();
+            ApplyFilter(resetPage: false);
+            var exactGroups = _duplicateMemberships.Values
+                .Where(item => item.IsExactDuplicate)
+                .Select(item => item.ExactGroupId)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+            var similarGroups = _duplicateMemberships.Values
+                .Where(item => item.IsSimilar)
+                .Select(item => item.SimilarGroupId)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
+            StatusText = AppText.AnalysisComplete(exactGroups, similarGroups);
+            StatusDetail = AppText.AnalyzeImagesTooltip;
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = AppText.AnalysisCancelled;
+            StatusDetail = AppText.ListNotUpdated;
+        }
+        catch (Exception exception)
+        {
+            StatusText = AppText.AnalysisFailed;
+            StatusDetail = exception.Message;
+        }
+        finally
+        {
+            IsAnalyzing = false;
+            ConfigureRefreshTimer();
+        }
+    }
+
+    private void CancelAnalysis() => _analysisCancellation?.Cancel();
+
     private async Task ScanAsync()
     {
         if (IsScanning)
@@ -490,9 +871,10 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         try
         {
             var roots = BuildRoots();
-            var result = await ScreenshotScanner.ScanAsync(
+            var result = await ScreenshotScanner.ScanIncrementalAsync(
                 roots,
                 Math.Clamp(_settings.MaxDepth, 1, 64),
+                _records.ToArray(),
                 progress,
                 cancellationToken);
 
@@ -519,12 +901,18 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
                 _catalogScanUtc = completedUtc;
                 _imageCatalogLoaded = true;
                 RebuildFolders(_records, result.ScannedRoots);
+                RebuildDuplicateMemberships();
                 ApplyFilter(resetPage: true);
 
                 LastUpdatedText = AppText.LastScanned(completedUtc.ToLocalTime());
                 StatusText = AppText.ScreenshotsFound(_records.Count);
                 StatusDetail = result.Warnings.Count == 0
-                    ? AppText.FoldersChecked(result.DirectoriesVisited, FormatDuration(result.Duration))
+                    ? AppText.IncrementalScanCompleted(
+                        result.DirectoriesVisited,
+                        result.Incremental.Reused,
+                        result.Incremental.AddedOrUpdated,
+                        result.Incremental.Removed,
+                        FormatDuration(result.Duration))
                     : AppText.CompletedWithWarnings(result.Warnings.Count);
 
                 if (!_restrictToSessionRoots)
@@ -613,6 +1001,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         _imageCatalogLoaded = true;
         _hasPersistedCatalog = true;
         RebuildFolders(_records, roots);
+        RebuildDuplicateMemberships();
         ApplyFilter(resetPage: true);
         LastUpdatedText = AppText.LastScanned(catalog.LastSuccessfulScanUtc.ToLocalTime());
         StatusText = AppText.SavedCatalogLoaded(_records.Count);
@@ -890,7 +1279,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         var folderPath = SelectedFolder?.Path;
 
         _filteredRecords.Clear();
-        _filteredRecords.AddRange(_records.Where(record =>
+        var matchingRecords = _records.Where(record =>
         {
             if (!string.IsNullOrWhiteSpace(folderPath) &&
                 !string.Equals(record.LibraryFolder, folderPath, StringComparison.OrdinalIgnoreCase))
@@ -898,10 +1287,43 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
                 return false;
             }
 
+            _userData.TryGetValue(record.FilePath, out var userData);
+            _duplicateMemberships.TryGetValue(record.FilePath, out var membership);
+            var matchesGalleryFilter = SelectedGalleryFilter.Kind switch
+            {
+                GalleryFilterKind.Favorites => userData?.IsFavorite == true,
+                GalleryFilterKind.Tagged => userData?.Tags.Count > 0,
+                GalleryFilterKind.Untagged => userData?.Tags.Count is null or 0,
+                GalleryFilterKind.ExactDuplicates => membership?.IsExactDuplicate == true,
+                GalleryFilterKind.SimilarImages => membership?.IsSimilar == true,
+                _ => true
+            };
+            if (!matchesGalleryFilter)
+            {
+                return false;
+            }
+
+            if (SelectedTagFilter.Tag is { Length: > 0 } tag &&
+                userData?.Tags.Contains(tag, StringComparer.CurrentCultureIgnoreCase) != true)
+            {
+                return false;
+            }
+
             return query.Length == 0 ||
                    record.FilePath.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
-                   record.GameName.Contains(query, StringComparison.CurrentCultureIgnoreCase);
-        }));
+                   record.GameName.Contains(query, StringComparison.CurrentCultureIgnoreCase) ||
+                   (userData?.Tags.Any(tagValue =>
+                       tagValue.Contains(query, StringComparison.CurrentCultureIgnoreCase)) ?? false);
+        });
+        matchingRecords = ScreenshotBrowseQuery.FilterByDate(
+            matchingRecords, SelectedDatePeriod.Key, DateFrom, DateTo, DateTime.Today);
+        Func<ScreenshotRecord, string?>? groupKey = SelectedGalleryFilter.Kind switch
+        {
+            GalleryFilterKind.ExactDuplicates => record => _duplicateMemberships[record.FilePath].ExactGroupId,
+            GalleryFilterKind.SimilarImages => record => _duplicateMemberships[record.FilePath].SimilarGroupId,
+            _ => null
+        };
+        _filteredRecords.AddRange(ScreenshotBrowseQuery.Sort(matchingRecords, SelectedSortOrder.Key, groupKey));
 
         if (PageIndex >= PageCount)
         {
@@ -937,7 +1359,9 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
                      .Skip(PageIndex * PageSize)
                      .Take(PageSize))
         {
-            VisibleItems.Add(new ScreenshotItemViewModel(record));
+            _userData.TryGetValue(record.FilePath, out var userData);
+            _duplicateMemberships.TryGetValue(record.FilePath, out var membership);
+            VisibleItems.Add(new ScreenshotItemViewModel(record, userData, membership));
         }
 
         _ = LoadVisibleThumbnailsAsync(VisibleItems.ToArray(), cancellationToken);
@@ -1040,7 +1464,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
 
     private async Task RemoveCustomRootAsync(FolderViewModel folder)
     {
-        if (_isRestoringCatalog || IsScanning)
+        if (_isRestoringCatalog || IsScanning || IsAnalyzing)
         {
             return;
         }
@@ -1123,10 +1547,13 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(IsEmpty));
         OnPropertyChanged(nameof(IsFolderOnlyEmpty));
         OnPropertyChanged(nameof(CanEditFolders));
+        OnPropertyChanged(nameof(CanAnalyze));
+        OnPropertyChanged(nameof(IsBusy));
         OnPropertyChanged(nameof(LoadingTitle));
         OnPropertyChanged(nameof(LoadingDetail));
         _scanCommand.RaiseCanExecuteChanged();
         _removeRootCommand.RaiseCanExecuteChanged();
+        _analyzeCommand.RaiseCanExecuteChanged();
     }
 
     private async Task SaveSettingsQuietlyAsync()
@@ -1142,10 +1569,99 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         }
     }
 
+    private async Task SaveUserDataQuietlyAsync()
+    {
+        try
+        {
+            await _userDataStore.SaveAsync(ScreenshotUserDataStore.Create(_userData.Values));
+        }
+        catch (Exception exception)
+        {
+            StatusText = AppText.SettingsSaveFailed;
+            StatusDetail = exception.Message;
+        }
+    }
+
+    private void SetUserData(ScreenshotUserData item)
+    {
+        if (!item.IsFavorite && item.Tags.Count == 0)
+        {
+            _userData.Remove(item.FilePath);
+            return;
+        }
+
+        _userData[item.FilePath] = item;
+    }
+
+    private void RebuildTagFilters(string? preferredTag = null)
+    {
+        var selectedTag = preferredTag ?? _selectedTagFilter.Tag;
+        var tags = _userData.Values
+            .SelectMany(item => item.Tags)
+            .Distinct(StringComparer.CurrentCultureIgnoreCase)
+            .OrderBy(tag => tag, StringComparer.CurrentCultureIgnoreCase)
+            .ToArray();
+
+        TagFilters.Clear();
+        TagFilters.Add(new TagFilterOption(null, AppText.AllTags));
+        foreach (var tag in tags)
+        {
+            TagFilters.Add(new TagFilterOption(tag, tag));
+        }
+
+        _selectedTagFilter = TagFilters.FirstOrDefault(option =>
+            string.Equals(option.Tag, selectedTag, StringComparison.CurrentCultureIgnoreCase)) ?? TagFilters[0];
+        OnPropertyChanged(nameof(SelectedTagFilter));
+    }
+
+    private void RebuildDuplicateMemberships()
+    {
+        var current = _records.ToDictionary(
+            record => record.FilePath,
+            record => record,
+            StringComparer.OrdinalIgnoreCase);
+        var validAnalyses = _analyses.Values.Where(analysis =>
+            current.TryGetValue(analysis.FilePath, out var screenshot) &&
+            screenshot.FileSize == analysis.FileSize &&
+            screenshot.LastWriteTimeUtc == analysis.LastWriteTimeUtc).ToArray();
+        _duplicateMemberships = DuplicateGrouper.Build(validAnalyses);
+    }
+
+    private static string NormalizeTag(string? tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag))
+        {
+            return string.Empty;
+        }
+
+        var value = new string(tag.Trim().Where(character => !char.IsControl(character)).ToArray());
+        return value.Length <= 64 ? value : value[..64];
+    }
+
+    private static string ToSettingsKey(GalleryFilterKind kind) => kind switch
+    {
+        GalleryFilterKind.Favorites => "favorites",
+        GalleryFilterKind.Tagged => "tagged",
+        GalleryFilterKind.Untagged => "untagged",
+        GalleryFilterKind.ExactDuplicates => "exact-duplicates",
+        GalleryFilterKind.SimilarImages => "similar-images",
+        _ => "all"
+    };
+
+    private static GalleryFilterKind FromSettingsKey(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "favorites" => GalleryFilterKind.Favorites,
+        "tagged" => GalleryFilterKind.Tagged,
+        "untagged" => GalleryFilterKind.Untagged,
+        "exact-duplicates" => GalleryFilterKind.ExactDuplicates,
+        "similar-images" => GalleryFilterKind.SimilarImages,
+        _ => GalleryFilterKind.All
+    };
+
     private void ConfigureRefreshTimer()
     {
         _refreshTimer.Stop();
-        if (!AutoRefresh || IsScanning || _isRestoringCatalog || !_isInitialized)
+        if (!AutoRefresh || IsScanning || IsAnalyzing || _isRestoringCatalog || !_isInitialized)
         {
             return;
         }
@@ -1249,5 +1765,7 @@ internal sealed class MainWindowViewModel : ObservableObject, IDisposable
         _scanCancellation?.Dispose();
         _thumbnailCancellation?.Cancel();
         _thumbnailCancellation?.Dispose();
+        _analysisCancellation?.Cancel();
+        _analysisCancellation?.Dispose();
     }
 }

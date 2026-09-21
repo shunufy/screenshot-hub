@@ -144,7 +144,7 @@ public sealed class SettingsStore
 
     private static HubSettings Normalize(HubSettings settings)
     {
-        if (settings.SchemaVersion < HubSettings.CurrentSchemaVersion)
+        if (settings.SchemaVersion < 2)
         {
             // v0.2.0 enabled recurring scans by default. Disable that legacy default once
             // so slower disks do not keep performing full scans in the background.
@@ -155,6 +155,24 @@ public sealed class SettingsStore
         settings.SchemaVersion = HubSettings.CurrentSchemaVersion;
         settings.AutoRefreshMinutes = Math.Clamp(settings.AutoRefreshMinutes, 1, 120);
         settings.MaxDepth = Math.Clamp(settings.MaxDepth, 1, 64);
+        settings.GalleryFilter = settings.GalleryFilter?.Trim().ToLowerInvariant() switch
+        {
+            "favorites" => "favorites",
+            "tagged" => "tagged",
+            "untagged" => "untagged",
+            "exact-duplicates" => "exact-duplicates",
+            "similar" or "similar-images" => "similar-images",
+            _ => "all"
+        };
+        settings.TagFilter = string.IsNullOrWhiteSpace(settings.TagFilter)
+            ? null
+            : settings.TagFilter.Trim();
+        settings.DatePeriod = ScreenshotBrowseQuery.NormalizePeriod(settings.DatePeriod);
+        settings.SortOrder = ScreenshotBrowseQuery.NormalizeSort(settings.SortOrder);
+        settings.DateFrom = settings.DateFrom is { } from
+            ? DateTime.SpecifyKind(from.Date, DateTimeKind.Unspecified) : null;
+        settings.DateTo = settings.DateTo is { } to
+            ? DateTime.SpecifyKind(to.Date, DateTimeKind.Unspecified) : null;
         settings.CustomRoots = (settings.CustomRoots ?? [])
             .Select(PathUtility.Normalize)
             .Where(path => path is not null)

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <ScreenshotHubLanguage Condition="'$(ScreenshotHubLanguage)' == ''">ja-JP</ScreenshotHubLanguage>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ScreenshotHub\ScreenshotHub.csproj" />
+    <AssemblyMetadata Include="ScreenshotHubLanguage" Value="$(ScreenshotHubLanguage)" />
+  </ItemGroup>
+</Project>
